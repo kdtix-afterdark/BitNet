@@ -29,7 +29,15 @@ import numpy as np
 from sentencepiece import SentencePieceProcessor
 
 if 'NO_LOCAL_GGUF' not in os.environ:
-    sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
+    utils_dir = Path(__file__).resolve().parent
+    gguf_paths = (
+        utils_dir / "gguf-py",
+        utils_dir.parent / "3rdparty" / "llama.cpp" / "gguf-py",
+    )
+    for gguf_path in gguf_paths:
+        if gguf_path.is_dir():
+            sys.path.insert(1, str(gguf_path))
+            break
 import gguf
 
 if TYPE_CHECKING:
@@ -422,6 +430,7 @@ class BpeVocab(Vocab):
 
     def __init__(self, base_path: Path):
         added_tokens: dict[str, int] = {}
+        self.tokenizer_pre = "gpt-2"
 
         if (fname_tokenizer := base_path / 'vocab.json').exists():
             # "slow" tokenizer
@@ -450,6 +459,7 @@ class BpeVocab(Vocab):
                 raise FileNotFoundError('Cannot find GPT-2 BPE tokenizer')
 
             self.vocab = tokenizer_model["vocab"]
+            self.tokenizer_pre = self._infer_tokenizer_pre(tokenizer_json)
 
             if (added := tokenizer_json.get('added_tokens')) is not None:
                 # Added tokens here can be duplicates of the main vocabulary.
@@ -471,6 +481,24 @@ class BpeVocab(Vocab):
         self.vocab_size_base      = vocab_size
         self.vocab_size           = self.vocab_size_base + len(self.added_tokens_list)
         self.fname_tokenizer      = fname_tokenizer
+
+    @staticmethod
+    def _infer_tokenizer_pre(tokenizer_json: dict[str, Any]) -> str:
+        model = tokenizer_json.get("model", {})
+        decoder = tokenizer_json.get("decoder", {})
+        pre_tokenizer = tokenizer_json.get("pre_tokenizer", {})
+
+        is_llama_bpe = (
+            model.get("type") == "BPE"
+            and model.get("ignore_merges", False)
+            and not model.get("byte_fallback", True)
+            and decoder.get("type") == "ByteLevel"
+            and pre_tokenizer.get("type") == "Sequence"
+        )
+        if is_llama_bpe:
+            return "llama-bpe"
+
+        return "gpt-2"
 
     def bpe_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
         reverse_vocab = {id: encoded_tok for encoded_tok, id in self.vocab.items()}
@@ -1208,6 +1236,8 @@ class OutputFile:
     def add_meta_vocab(self, vocab: Vocab) -> None:
         # Ensure that tokenizer_model is added to the GGUF model
         self.gguf.add_tokenizer_model(vocab.tokenizer_model)
+        if tokenizer_pre := getattr(vocab, "tokenizer_pre", None):
+            self.gguf.add_tokenizer_pre(tokenizer_pre)
         # Extract model vocabulary for model conversion
         tokens, scores, toktypes = self.extract_vocabulary_from_model(vocab)
 
