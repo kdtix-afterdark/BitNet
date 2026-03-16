@@ -44,4 +44,5 @@ __pycache__/
 poetry.toml
 
 build/
+broker_logs/
 logs/
