@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Optional
 BROKER_POLICY_TEMPLATE = """Current local date: {current_date}
 
 Operating rules:
+- Respond in English unless the user explicitly requests another language.
 - Never claim a specific built-in knowledge cutoff month or year.
 - For claims about local code, files, tools, databases, runtime state, or current project status, rely on the provided evidence block.
 - If needed evidence is missing, say what is missing instead of guessing.

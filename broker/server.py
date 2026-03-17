@@ -321,7 +321,7 @@ class BrokerRequestHandler(BaseHTTPRequestHandler):
         return json.loads(raw.decode("utf-8"))
 
     def _send_json(self, status_code: int, payload: Dict[str, Any]) -> None:
-        body = json.dumps(payload, indent=2, ensure_ascii=True).encode("utf-8")
+        body = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))

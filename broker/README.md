@@ -176,6 +176,10 @@ first heading, file path, tool names used, directory entries, search match
 count, and truncation checks. In those cases, the response includes
 `repair_applied: true`, `repair_reason`, and `original_response`.
 
+The default broker prompt policy also instructs the model to respond in
+English unless the user explicitly requests another language. Broker JSON
+responses now emit UTF-8 directly instead of ASCII-escaped `\uXXXX` sequences.
+
 The broker also supports a small memory-aware routing layer before the model is
 invoked. Current routed prompt forms are:
 
