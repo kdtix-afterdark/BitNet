@@ -8,16 +8,25 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
+from .mcp import McpRegistry
+
 
 class ToolRegistry:
     """Safe deterministic tools exposed by the broker MVP."""
 
-    def __init__(self, workspace_root: Path) -> None:
+    def __init__(self, workspace_root: Path, mcp_registry: McpRegistry | None = None) -> None:
         self.workspace_root = workspace_root.resolve()
+        self.mcp_registry = mcp_registry
         self._tools: Dict[str, Callable[..., Any]] = {
             "list_directory": self.list_directory,
             "read_text_file": self.read_text_file,
             "search_text": self.search_text,
+            "mcp_list_servers": self.mcp_list_servers,
+            "mcp_list_server_tools": self.mcp_list_server_tools,
+            "mcp_call_tool": self.mcp_call_tool,
+            "mcp_memory_call": self.mcp_memory_call,
+            "mcp_sequential_thinking": self.mcp_sequential_thinking,
+            "mcp_context7_call": self.mcp_context7_call,
         }
 
     def list_tools(self) -> List[str]:
@@ -130,6 +139,64 @@ class ToolRegistry:
 
         raise RuntimeError("ripgrep is required for search_text in this MVP")
 
+    def mcp_list_servers(self) -> Dict[str, Any]:
+        """List configured MCP servers known to the broker."""
+        if self.mcp_registry is None:
+            return {"servers": []}
+        return {"servers": self.mcp_registry.list_servers()}
+
+    def mcp_list_server_tools(self, server: str) -> Dict[str, Any]:
+        """List tools exposed by one configured MCP server."""
+        if self.mcp_registry is None:
+            raise ValueError("MCP registry is not configured")
+        return {
+            "server": server,
+            "tools": self.mcp_registry.list_tools(server),
+        }
+
+    def mcp_call_tool(
+        self,
+        server: str,
+        tool: str,
+        arguments: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Call one tool on one configured MCP server."""
+        if self.mcp_registry is None:
+            raise ValueError("MCP registry is not configured")
+        return {
+            "server": server,
+            "tool": tool,
+            "result": self.mcp_registry.call_tool(server, tool, arguments),
+        }
+
+    def mcp_memory_call(
+        self,
+        tool: str,
+        arguments: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Convenience wrapper for the configured Memory MCP server."""
+        return self.mcp_call_tool("memory", tool, arguments)
+
+    def mcp_sequential_thinking(
+        self,
+        arguments: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Convenience wrapper for the Sequential Thinking MCP tool."""
+        return self.mcp_call_tool("sequential-thinking", "sequentialthinking", arguments)
+
+    def mcp_context7_call(
+        self,
+        tool: str,
+        arguments: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Convenience wrapper for the configured Context7 MCP server."""
+        return self.mcp_call_tool("context7", tool, arguments)
+
+    def close(self) -> None:
+        """Close any launched MCP sessions."""
+        if self.mcp_registry is not None:
+            self.mcp_registry.close()
+
 
 def tool_result_to_evidence(tool_result: Dict[str, Any]) -> Dict[str, str]:
     """Convert one tool result into a prompt-ready evidence item."""
@@ -138,4 +205,3 @@ def tool_result_to_evidence(tool_result: Dict[str, Any]) -> Dict[str, str]:
         "kind": "tool-result",
         "content": json.dumps(tool_result["result"], indent=2, ensure_ascii=True),
     }
-

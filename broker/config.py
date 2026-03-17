@@ -39,6 +39,10 @@ class BrokerConfig:
     startup_timeout: int
     request_timeout: int
     log_dir: Path
+    mcp_config_path: Path
+    mcp_startup_timeout: int
+    mcp_request_timeout: int
+    mcp_protocol_version: str
 
     @classmethod
     def from_env(cls) -> "BrokerConfig":
@@ -82,5 +86,16 @@ class BrokerConfig:
             startup_timeout=_env_int("BITNET_BROKER_STARTUP_TIMEOUT", 120),
             request_timeout=_env_int("BITNET_BROKER_REQUEST_TIMEOUT", 180),
             log_dir=log_dir,
+            mcp_config_path=Path(
+                os.environ.get(
+                    "BITNET_MCP_CONFIG",
+                    workspace_root / "broker" / "mcp_servers.json",
+                )
+            ).resolve(),
+            mcp_startup_timeout=_env_int("BITNET_MCP_STARTUP_TIMEOUT", 30),
+            mcp_request_timeout=_env_int("BITNET_MCP_REQUEST_TIMEOUT", 60),
+            mcp_protocol_version=os.environ.get(
+                "BITNET_MCP_PROTOCOL_VERSION",
+                "2025-03-26",
+            ),
         )
-

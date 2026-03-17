@@ -45,4 +45,6 @@ poetry.toml
 
 build/
 broker_logs/
+broker_memory/
+broker/mcp_servers.json
 logs/

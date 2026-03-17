@@ -1,0 +1,11 @@
+{
+  "servers": {
+    "memory": {
+      "enabled": true,
+      "transport": "stdio",
+      "description": "Local mock memory MCP server for broker smoke tests.",
+      "command": "python3",
+      "args": ["broker/mock_mcp_server.py"]
+    }
+  }
+}

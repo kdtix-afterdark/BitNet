@@ -1,0 +1,28 @@
+{
+  "servers": {
+    "memory": {
+      "enabled": false,
+      "transport": "stdio",
+      "description": "Persistent knowledge-graph memory MCP server.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "${workspace_root}/broker_memory/memory.json"
+      }
+    },
+    "sequential-thinking": {
+      "enabled": false,
+      "transport": "stdio",
+      "description": "Sequential Thinking MCP server for explicit thought steps.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "context7": {
+      "enabled": false,
+      "transport": "stdio",
+      "description": "Context7 MCP server for version-specific library and framework documentation.",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    }
+  }
+}

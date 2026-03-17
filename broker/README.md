@@ -25,8 +25,31 @@ tooling, and IDE integration separate.
 - `list_directory`
 - `read_text_file`
 - `search_text`
+- `mcp_list_servers`
+- `mcp_list_server_tools`
+- `mcp_call_tool`
+- `mcp_memory_call`
+- `mcp_sequential_thinking`
+- `mcp_context7_call`
 
 All tool paths are restricted to the current workspace root.
+
+## MCP Adapter Config
+
+The broker now supports stdio MCP servers through a local config file.
+
+- Default config path: `broker/mcp_servers.json`
+- Example real-server template: [broker/mcp_servers.example.json](/Users/ckreager/repos/kdtix/LLMs/BitNet/broker/mcp_servers.example.json)
+- Local smoke-test config: [broker/mcp_servers.mock.json](/Users/ckreager/repos/kdtix/LLMs/BitNet/broker/mcp_servers.mock.json)
+
+The intended rollout order is:
+
+1. Memory
+2. Sequential Thinking
+3. Context7
+4. Reference servers
+5. Major platform servers
+6. QA / browser / delivery tooling
 
 ## Run
 
@@ -163,3 +186,80 @@ curl -s http://127.0.0.1:8091/artifacts/draft \
   skips required sections.
 - In that case, the response includes `repair_applied: true`,
   `original_draft`, and `missing_sections_before_repair`.
+
+## MCP Smoke Test
+
+Start the broker with the mock MCP config:
+
+```bash
+BITNET_MCP_CONFIG=broker/mcp_servers.mock.json \
+python run_broker.py \
+  --model models/bitnet-b1.58-2B-4T-bf16/ggml-model-i2s-bitnet.gguf \
+  --broker-port 8092 \
+  --llama-port 8082 \
+  --threads 1 \
+  --ctx-size 512 \
+  --n-predict 96
+```
+
+List configured MCP servers:
+
+```bash
+curl -s http://127.0.0.1:8092/tools/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool_calls": [
+      {
+        "tool": "mcp_list_servers",
+        "args": {}
+      }
+    ]
+  }'
+```
+
+List tools on the Memory adapter:
+
+```bash
+curl -s http://127.0.0.1:8092/tools/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool_calls": [
+      {
+        "tool": "mcp_list_server_tools",
+        "args": {
+          "server": "memory"
+        }
+      }
+    ]
+  }'
+```
+
+Store and recall one fact through the MCP adapter:
+
+```bash
+curl -s http://127.0.0.1:8092/tools/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool_calls": [
+      {
+        "tool": "mcp_memory_call",
+        "args": {
+          "tool": "remember_fact",
+          "arguments": {
+            "key": "project",
+            "value": "BitNet broker"
+          }
+        }
+      },
+      {
+        "tool": "mcp_memory_call",
+        "args": {
+          "tool": "recall_fact",
+          "arguments": {
+            "key": "project"
+          }
+        }
+      }
+    ]
+  }'
+```

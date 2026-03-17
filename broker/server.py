@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from .config import BrokerConfig
 from .llama_runtime import LlamaServerRuntime
+from .mcp import McpRegistry
 from .postprocess import (
     postprocess_markdown,
     repair_chat_response,
@@ -31,7 +32,8 @@ class BrokerApp:
         self.config = config
         self.sessions = SessionStore()
         self.runtime = LlamaServerRuntime(config)
-        self.tools = ToolRegistry(config.workspace_root)
+        self.mcp_registry = McpRegistry(config)
+        self.tools = ToolRegistry(config.workspace_root, self.mcp_registry)
 
     def build_health(self) -> Dict[str, Any]:
         """Return a combined broker + model health view."""
@@ -51,6 +53,7 @@ class BrokerApp:
                 "workspace_root": str(self.config.workspace_root),
                 "model_path": str(self.config.model_path),
                 "tools": self.tools.list_tools(),
+                "mcp_servers": self.mcp_registry.list_servers(),
             },
             "llama_server": model_health,
         }
@@ -169,6 +172,10 @@ class BrokerApp:
             "evidence": evidence,
             "raw": response,
         }
+
+    def close(self) -> None:
+        """Release broker-managed resources."""
+        self.tools.close()
 
 
 class BrokerHTTPServer(ThreadingHTTPServer):
@@ -295,6 +302,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        app.close()
         app.runtime.stop()
         server.server_close()
 
