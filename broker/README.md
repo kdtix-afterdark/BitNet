@@ -41,6 +41,8 @@ The broker now supports stdio MCP servers through a local config file.
 - Default config path: `broker/mcp_servers.json`
 - Example real-server template: [broker/mcp_servers.example.json](/Users/ckreager/repos/kdtix/LLMs/BitNet/broker/mcp_servers.example.json)
 - Local smoke-test config: [broker/mcp_servers.mock.json](/Users/ckreager/repos/kdtix/LLMs/BitNet/broker/mcp_servers.mock.json)
+- Real Memory wrapper: [broker/run_memory_mcp.sh](/Users/ckreager/repos/kdtix/LLMs/BitNet/broker/run_memory_mcp.sh)
+- Local Node package manifest: [broker/package.json](/Users/ckreager/repos/kdtix/LLMs/BitNet/broker/package.json)
 
 The intended rollout order is:
 
@@ -50,6 +52,19 @@ The intended rollout order is:
 4. Reference servers
 5. Major platform servers
 6. QA / browser / delivery tooling
+
+## Install The Real Memory Server
+
+Install the upstream Memory MCP package into the repo-local `broker/` runtime:
+
+```bash
+npm install --prefix broker
+```
+
+The broker can then launch the real Memory server through the local wrapper in
+`broker/run_memory_mcp.sh`. The default local config file
+`broker/mcp_servers.json` already points at that wrapper.
+The configured persistent store path is `broker_memory/memory.jsonl`.
 
 ## Run
 
@@ -212,6 +227,42 @@ curl -s http://127.0.0.1:8092/tools/run \
       {
         "tool": "mcp_list_servers",
         "args": {}
+      }
+    ]
+  }'
+```
+
+## Real Memory Smoke Test
+
+After `npm install --prefix broker`, start the broker with the default local
+config:
+
+```bash
+python run_broker.py \
+  --model models/bitnet-b1.58-2B-4T-bf16/ggml-model-i2s-bitnet.gguf \
+  --broker-port 8093 \
+  --llama-port 8083 \
+  --threads 1 \
+  --ctx-size 512 \
+  --n-predict 96
+```
+
+Then verify the real Memory server through the broker:
+
+```bash
+curl -s http://127.0.0.1:8093/tools/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool_calls": [
+      {
+        "tool": "mcp_list_servers",
+        "args": {}
+      },
+      {
+        "tool": "mcp_list_server_tools",
+        "args": {
+          "server": "memory"
+        }
       }
     ]
   }'

@@ -1,13 +1,13 @@
 {
   "servers": {
     "memory": {
-      "enabled": false,
+      "enabled": true,
       "transport": "stdio",
       "description": "Persistent knowledge-graph memory MCP server.",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "command": "bash",
+      "args": ["broker/run_memory_mcp.sh"],
       "env": {
-        "MEMORY_FILE_PATH": "${workspace_root}/broker_memory/memory.json"
+        "MEMORY_FILE_PATH": "${workspace_root}/broker_memory/memory.jsonl"
       }
     },
     "sequential-thinking": {
