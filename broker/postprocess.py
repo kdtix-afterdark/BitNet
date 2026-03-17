@@ -112,6 +112,125 @@ def extract_first_markdown_title_from_evidence(
     return None
 
 
+def extract_tool_names_from_evidence(evidence_items: Iterable[Dict[str, str]]) -> List[str]:
+    """Return the distinct tool names recorded in evidence sources."""
+    tool_names: List[str] = []
+    for item in evidence_items:
+        source = item.get("source", "")
+        if not source.startswith("tool:"):
+            continue
+        tool_name = source.split(":", 1)[1].strip()
+        if tool_name and tool_name not in tool_names:
+            tool_names.append(tool_name)
+    return tool_names
+
+
+def extract_paths_from_evidence(evidence_items: Iterable[Dict[str, str]]) -> List[str]:
+    """Return distinct workspace-relative paths found in evidence payloads."""
+    paths: List[str] = []
+    for item in evidence_items:
+        payload = _parse_evidence_payload(item.get("content", ""))
+        if not payload:
+            continue
+        path_value = payload.get("path")
+        if isinstance(path_value, str) and path_value not in paths:
+            paths.append(path_value)
+
+        matches = payload.get("matches")
+        if isinstance(matches, list):
+            for match in matches:
+                if not isinstance(match, dict):
+                    continue
+                match_path = match.get("path")
+                if isinstance(match_path, str) and match_path not in paths:
+                    paths.append(match_path)
+
+        entries = payload.get("entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                entry_path = entry.get("path")
+                if isinstance(entry_path, str) and entry_path not in paths:
+                    paths.append(entry_path)
+    return paths
+
+
+def extract_directory_entries_from_evidence(
+    evidence_items: Iterable[Dict[str, str]],
+    max_entries: int = 10,
+) -> List[str]:
+    """Return directory entry paths from list_directory evidence."""
+    entries_out: List[str] = []
+    for item in evidence_items:
+        payload = _parse_evidence_payload(item.get("content", ""))
+        if not payload:
+            continue
+        entries = payload.get("entries")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_path = entry.get("path")
+            if isinstance(entry_path, str) and entry_path not in entries_out:
+                entries_out.append(entry_path)
+            if len(entries_out) >= max_entries:
+                return entries_out
+    return entries_out
+
+
+def extract_match_count_from_evidence(evidence_items: Iterable[Dict[str, str]]) -> Optional[int]:
+    """Return the total number of search matches represented in evidence."""
+    count = 0
+    found = False
+    for item in evidence_items:
+        payload = _parse_evidence_payload(item.get("content", ""))
+        if not payload:
+            continue
+        matches = payload.get("matches")
+        if not isinstance(matches, list):
+            continue
+        count += len(matches)
+        found = True
+    return count if found else None
+
+
+def extract_truncated_flag_from_evidence(
+    evidence_items: Iterable[Dict[str, str]],
+) -> Optional[bool]:
+    """Return whether any evidence payload indicates truncation."""
+    saw_flag = False
+    any_truncated = False
+    for item in evidence_items:
+        payload = _parse_evidence_payload(item.get("content", ""))
+        if not payload:
+            continue
+        truncated = payload.get("truncated")
+        if isinstance(truncated, bool):
+            saw_flag = True
+            any_truncated = any_truncated or truncated
+    return any_truncated if saw_flag else None
+
+
+def _format_scalar_response(value: str, prompt: str) -> str:
+    """Format one extracted scalar according to a simple prompt contract."""
+    lowered_prompt = prompt.lower()
+    if "yes/no" in lowered_prompt or lowered_prompt.startswith("is ") or lowered_prompt.startswith("are "):
+        return value
+    if "only" in lowered_prompt or "just" in lowered_prompt or "number" in lowered_prompt:
+        return value
+    return value
+
+
+def _format_list_response(values: List[str], prompt: str) -> str:
+    """Format a short extracted list response."""
+    lowered_prompt = prompt.lower()
+    if "one per line" in lowered_prompt or "newline" in lowered_prompt:
+        return "\n".join(values)
+    return ", ".join(values)
+
+
 def repair_chat_response(
     prompt: str,
     text: str,
@@ -121,14 +240,63 @@ def repair_chat_response(
     normalized = strip_markdown_fence(text).strip()
     lowered_prompt = prompt.lower()
 
-    title_only_request = (
+    if (
         "title only" in lowered_prompt
         or "document title only" in lowered_prompt
         or "answer with the document title" in lowered_prompt
-    )
-    if title_only_request:
+    ):
         title = extract_first_markdown_title_from_evidence(evidence_items)
         if title:
-            return title, True, "extracted_title_from_evidence"
+            return _format_scalar_response(title, prompt), True, "extracted_title_from_evidence"
+
+    if "first heading" in lowered_prompt or "top heading" in lowered_prompt:
+        heading = extract_first_markdown_title_from_evidence(evidence_items)
+        if heading:
+            return _format_scalar_response(heading, prompt), True, "extracted_first_heading_from_evidence"
+
+    if (
+        "tool names" in lowered_prompt
+        or "which tools" in lowered_prompt
+        or "tools were used" in lowered_prompt
+    ):
+        tool_names = extract_tool_names_from_evidence(evidence_items)
+        if tool_names:
+            return _format_list_response(tool_names, prompt), True, "extracted_tool_names_from_evidence"
+
+    if (
+        "file path" in lowered_prompt
+        or "what path" in lowered_prompt
+        or "which path" in lowered_prompt
+    ):
+        paths = extract_paths_from_evidence(evidence_items)
+        if paths:
+            return _format_scalar_response(paths[0], prompt), True, "extracted_path_from_evidence"
+
+    if (
+        "directory entries" in lowered_prompt
+        or "list files" in lowered_prompt
+        or "list entries" in lowered_prompt
+    ):
+        entries = extract_directory_entries_from_evidence(evidence_items)
+        if entries:
+            return _format_list_response(entries, prompt), True, "extracted_directory_entries_from_evidence"
+
+    if (
+        "how many matches" in lowered_prompt
+        or "number of matches" in lowered_prompt
+        or "count of matches" in lowered_prompt
+    ):
+        match_count = extract_match_count_from_evidence(evidence_items)
+        if match_count is not None:
+            return _format_scalar_response(str(match_count), prompt), True, "extracted_match_count_from_evidence"
+
+    if (
+        "is it truncated" in lowered_prompt
+        or "was it truncated" in lowered_prompt
+        or "were results truncated" in lowered_prompt
+    ):
+        truncated = extract_truncated_flag_from_evidence(evidence_items)
+        if truncated is not None:
+            return "Yes" if truncated else "No", True, "extracted_truncation_flag_from_evidence"
 
     return normalized, False, None

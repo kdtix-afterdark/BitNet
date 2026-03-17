@@ -132,10 +132,11 @@ curl -s http://127.0.0.1:8091/chat \
   }'
 ```
 
-For simple extractive prompts such as "answer with the document title only",
-the broker applies a deterministic repair from evidence when possible. In that
-case, the response includes `repair_applied: true`,
-`repair_reason: "extracted_title_from_evidence"`, and `original_response`.
+For simple extractive prompts, the broker applies deterministic repairs from
+evidence when possible. Current supported patterns include document title,
+first heading, file path, tool names used, directory entries, search match
+count, and truncation checks. In those cases, the response includes
+`repair_applied: true`, `repair_reason`, and `original_response`.
 
 Artifact draft plus deterministic heading checks:
 
