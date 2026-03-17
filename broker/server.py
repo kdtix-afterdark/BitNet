@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from .config import BrokerConfig
 from .llama_runtime import LlamaServerRuntime
 from .mcp import McpRegistry
+from .memory_routing import maybe_route_memory_prompt
 from .postprocess import (
     postprocess_markdown,
     repair_chat_response,
@@ -100,6 +101,21 @@ class BrokerApp:
         if not prompt:
             raise ValueError("chat requests require a non-empty prompt")
 
+        memory_route = maybe_route_memory_prompt(prompt, self.mcp_registry)
+        if memory_route is not None and memory_route.handled:
+            return {
+                "response": memory_route.response,
+                "original_response": None,
+                "repair_applied": False,
+                "repair_reason": None,
+                "route_applied": True,
+                "route_reason": memory_route.route_reason,
+                "route_operations": memory_route.operations or [],
+                "model_invoked": False,
+                "evidence": memory_route.evidence or [],
+                "raw": None,
+            }
+
         system_prompt = self._resolve_system_prompt(body, DEFAULT_CHAT_PROMPT)
         evidence = self.collect_evidence(body)
         messages = build_messages(
@@ -123,6 +139,10 @@ class BrokerApp:
             "original_response": content,
             "repair_applied": repair_applied,
             "repair_reason": repair_reason,
+            "route_applied": False,
+            "route_reason": None,
+            "route_operations": [],
+            "model_invoked": True,
             "evidence": evidence,
             "raw": response,
         }

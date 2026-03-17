@@ -176,6 +176,17 @@ first heading, file path, tool names used, directory entries, search match
 count, and truncation checks. In those cases, the response includes
 `repair_applied: true`, `repair_reason`, and `original_response`.
 
+The broker also supports a small memory-aware routing layer before the model is
+invoked. Current routed prompt forms are:
+
+- `Remember <Entity>: <Observation>`
+- `What do you remember about <Entity>?`
+- `Show memory graph`
+
+For those prompts, the broker talks to the Memory MCP server directly and
+returns `route_applied: true`, `route_reason`, `route_operations`, and
+`model_invoked: false`.
+
 Artifact draft plus deterministic heading checks:
 
 ```bash
