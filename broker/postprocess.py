@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 _MARKDOWN_FENCE_RE = re.compile(r"^```(?:markdown|md)?\s*\n(?P<body>[\s\S]*?)\n```$")
@@ -83,3 +84,51 @@ def repair_required_sections(
         repaired_blocks.append(f"# {section}\n{body}")
 
     return "\n\n".join(repaired_blocks).rstrip() + "\n"
+
+
+def _parse_evidence_payload(content: str) -> Optional[Dict[str, object]]:
+    """Best-effort parse of one JSON evidence payload."""
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def extract_first_markdown_title_from_evidence(
+    evidence_items: Iterable[Dict[str, str]],
+) -> Optional[str]:
+    """Extract the first markdown H1 title found in evidence payload content."""
+    for item in evidence_items:
+        payload = _parse_evidence_payload(item.get("content", ""))
+        if not payload:
+            continue
+        raw_content = payload.get("content")
+        if not isinstance(raw_content, str):
+            continue
+        match = re.search(r"^#\s+(.+?)\s*$", raw_content, flags=re.MULTILINE)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def repair_chat_response(
+    prompt: str,
+    text: str,
+    evidence_items: Iterable[Dict[str, str]],
+) -> Tuple[str, bool, Optional[str]]:
+    """Apply deterministic repairs for simple extractive grounded chat tasks."""
+    normalized = strip_markdown_fence(text).strip()
+    lowered_prompt = prompt.lower()
+
+    title_only_request = (
+        "title only" in lowered_prompt
+        or "document title only" in lowered_prompt
+        or "answer with the document title" in lowered_prompt
+    )
+    if title_only_request:
+        title = extract_first_markdown_title_from_evidence(evidence_items)
+        if title:
+            return title, True, "extracted_title_from_evidence"
+
+    return normalized, False, None

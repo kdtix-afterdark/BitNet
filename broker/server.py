@@ -10,7 +10,11 @@ from urllib.parse import urlparse
 
 from .config import BrokerConfig
 from .llama_runtime import LlamaServerRuntime
-from .postprocess import postprocess_markdown, repair_required_sections
+from .postprocess import (
+    postprocess_markdown,
+    repair_chat_response,
+    repair_required_sections,
+)
 from .prompting import build_messages
 from .session_store import SessionStore
 from .tools import ToolRegistry, tool_result_to_evidence
@@ -106,8 +110,16 @@ class BrokerApp:
             temperature=body.get("temperature"),
         )
         content = response["choices"][0]["message"]["content"]
+        repaired_content, repair_applied, repair_reason = repair_chat_response(
+            prompt=prompt,
+            text=content,
+            evidence_items=evidence,
+        )
         return {
-            "response": content,
+            "response": repaired_content,
+            "original_response": content,
+            "repair_applied": repair_applied,
+            "repair_reason": repair_reason,
             "evidence": evidence,
             "raw": response,
         }
