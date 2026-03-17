@@ -187,6 +187,14 @@ For those prompts, the broker talks to the Memory MCP server directly and
 returns `route_applied: true`, `route_reason`, `route_operations`, and
 `model_invoked: false`.
 
+For non-routed chat, you can also inject Memory results as evidence by passing
+`memory_query`. In that path:
+
+- `memory_evidence_applied` reports whether Memory evidence was injected
+- `memory_evidence_reason` describes the injection path
+- `include_tool_manifest` defaults to `true`
+- `broker_controls_tools` defaults to `false`, and can be switched on per call
+
 Artifact draft plus deterministic heading checks:
 
 ```bash

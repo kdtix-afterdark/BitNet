@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from .config import BrokerConfig
 from .llama_runtime import LlamaServerRuntime
 from .mcp import McpRegistry
-from .memory_routing import maybe_route_memory_prompt
+from .memory_routing import maybe_collect_memory_evidence, maybe_route_memory_prompt
 from .postprocess import (
     postprocess_markdown,
     repair_chat_response,
@@ -100,6 +100,9 @@ class BrokerApp:
         prompt = body.get("prompt", "").strip()
         if not prompt:
             raise ValueError("chat requests require a non-empty prompt")
+        include_tool_manifest = bool(body.get("include_tool_manifest", True))
+        broker_controls_tools = bool(body.get("broker_controls_tools", False))
+        memory_query = body.get("memory_query")
 
         memory_route = maybe_route_memory_prompt(prompt, self.mcp_registry)
         if memory_route is not None and memory_route.handled:
@@ -112,16 +115,37 @@ class BrokerApp:
                 "route_reason": memory_route.route_reason,
                 "route_operations": memory_route.operations or [],
                 "model_invoked": False,
+                "memory_evidence_applied": bool(memory_route.evidence),
+                "memory_evidence_reason": memory_route.route_reason,
                 "evidence": memory_route.evidence or [],
                 "raw": None,
             }
 
         system_prompt = self._resolve_system_prompt(body, DEFAULT_CHAT_PROMPT)
         evidence = self.collect_evidence(body)
+        memory_evidence_result = maybe_collect_memory_evidence(
+            prompt,
+            self.mcp_registry,
+            explicit_query=memory_query if isinstance(memory_query, str) else None,
+        )
+        memory_evidence = (
+            list(memory_evidence_result.evidence or [])
+            if memory_evidence_result is not None
+            else []
+        )
+        route_operations = (
+            list(memory_evidence_result.operations or [])
+            if memory_evidence_result is not None
+            else []
+        )
+        if memory_evidence:
+            evidence = memory_evidence + evidence
         messages = build_messages(
             system_prompt=system_prompt,
             user_prompt=prompt,
             evidence_items=evidence,
+            tool_manifest=self.tools.tool_manifest() if include_tool_manifest else [],
+            broker_controls_tools=broker_controls_tools,
         )
         response = self.runtime.chat(
             messages=messages,
@@ -141,8 +165,16 @@ class BrokerApp:
             "repair_reason": repair_reason,
             "route_applied": False,
             "route_reason": None,
-            "route_operations": [],
+            "route_operations": route_operations,
             "model_invoked": True,
+            "memory_evidence_applied": bool(memory_evidence),
+            "memory_evidence_reason": (
+                memory_evidence_result.route_reason
+                if memory_evidence_result is not None and memory_evidence
+                else None
+            ),
+            "include_tool_manifest": include_tool_manifest,
+            "broker_controls_tools": broker_controls_tools,
             "evidence": evidence,
             "raw": response,
         }
@@ -165,6 +197,8 @@ class BrokerApp:
             user_prompt=prompt,
             evidence_items=evidence,
             required_sections=required_sections,
+            tool_manifest=[],
+            broker_controls_tools=False,
         )
         response = self.runtime.chat(
             messages=messages,

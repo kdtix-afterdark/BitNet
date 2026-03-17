@@ -22,11 +22,51 @@ def get_current_date_string() -> str:
     return datetime.now().astimezone().strftime("%B %-d, %Y")
 
 
-def build_system_prompt(base_system_prompt: str) -> str:
+def format_tool_manifest(
+    tool_manifest: Iterable[Dict[str, str]],
+    broker_controls_tools: bool,
+) -> str:
+    """Render a compact model-facing broker tool manifest."""
+    items = list(tool_manifest)
+    if not items:
+        return ""
+
+    control_line = (
+        "Broker tool control mode: broker is in control of tool execution for this turn."
+        if broker_controls_tools
+        else "Broker tool control mode: broker is not in control for this turn."
+    )
+    usage_rules = (
+        "- Do not claim to have executed tools yourself.\n"
+        "- If current evidence is missing, say which broker tool would help."
+        if not broker_controls_tools
+        else "- Do not claim to have executed tools yourself.\n"
+        "- Rely on provided evidence and note missing evidence when needed."
+    )
+    lines = [
+        control_line,
+        "Known broker tools:",
+    ]
+    for item in items:
+        lines.append("- %s: %s" % (item["name"], item["description"]))
+    lines.append("Tool usage rules:\n%s" % usage_rules)
+    return "\n".join(lines)
+
+
+def build_system_prompt(
+    base_system_prompt: str,
+    tool_manifest: Optional[Iterable[Dict[str, str]]] = None,
+    broker_controls_tools: bool = False,
+) -> str:
     """Combine the base system prompt with local runtime policy."""
     policy = BROKER_POLICY_TEMPLATE.format(current_date=get_current_date_string()).strip()
     base = (base_system_prompt or "You are a precise local assistant.").strip()
-    return base + "\n\n" + policy
+    manifest_block = format_tool_manifest(tool_manifest or [], broker_controls_tools).strip()
+
+    blocks = [base, policy]
+    if manifest_block:
+        blocks.append(manifest_block)
+    return "\n\n".join(block for block in blocks if block)
 
 
 def format_evidence(evidence_items: Iterable[Dict[str, str]]) -> str:
@@ -49,6 +89,8 @@ def build_messages(
     user_prompt: str,
     evidence_items: Iterable[Dict[str, str]],
     required_sections: Optional[Iterable[str]] = None,
+    tool_manifest: Optional[Iterable[Dict[str, str]]] = None,
+    broker_controls_tools: bool = False,
 ) -> List[Dict[str, str]]:
     """Build chat messages for llama-server."""
     user_parts = [
@@ -77,7 +119,11 @@ def build_messages(
     return [
         {
             "role": "system",
-            "content": build_system_prompt(system_prompt),
+            "content": build_system_prompt(
+                system_prompt,
+                tool_manifest=tool_manifest,
+                broker_controls_tools=broker_controls_tools,
+            ),
         },
         {
             "role": "user",

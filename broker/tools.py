@@ -33,6 +33,20 @@ class ToolRegistry:
         """Return the supported tool names."""
         return sorted(self._tools.keys())
 
+    def tool_manifest(self) -> List[Dict[str, str]]:
+        """Return broker tool metadata for model-facing prompts."""
+        manifest = []
+        for name in self.list_tools():
+            tool_fn = self._tools[name]
+            description = (tool_fn.__doc__ or "").strip().splitlines()[0]
+            manifest.append(
+                {
+                    "name": name,
+                    "description": description,
+                }
+            )
+        return manifest
+
     def run_tool_call(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
         """Execute one registered tool call."""
         tool_name = tool_call.get("tool")

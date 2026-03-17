@@ -23,6 +23,11 @@ _SHOW_GRAPH_RE = re.compile(
     r"^\s*(?:show|read|display)\s+(?:the\s+)?memory graph\s*$",
     flags=re.IGNORECASE,
 )
+_MEMORY_EVIDENCE_RE = re.compile(
+    r"^\s*(?:what do you know about|summarize memory for|use memory for|memory about)\s+"
+    r"(?P<query>.+?)\s*\??\s*$",
+    flags=re.IGNORECASE,
+)
 
 
 @dataclass
@@ -57,6 +62,56 @@ def maybe_route_memory_prompt(
         return _handle_show_graph(mcp_registry)
 
     return None
+
+
+def maybe_collect_memory_evidence(
+    prompt: str,
+    mcp_registry: McpRegistry,
+    explicit_query: Optional[str] = None,
+) -> Optional[MemoryRouteResult]:
+    """Collect Memory MCP results as evidence for non-routed prompts."""
+    query = _normalize_value(explicit_query) if explicit_query else ""
+    if not query:
+        prompt_match = _MEMORY_EVIDENCE_RE.match(prompt.strip())
+        if prompt_match:
+            query = _normalize_value(prompt_match.group("query"))
+
+    if not query:
+        return None
+
+    operations: List[Dict[str, Any]] = []
+    try:
+        search_result = mcp_registry.call_tool("memory", "search_nodes", {"query": query})
+        operations.append(
+            {"server": "memory", "tool": "search_nodes", "result": search_result}
+        )
+        entities = _extract_entities(search_result)
+
+        if not entities:
+            exact_result = mcp_registry.call_tool("memory", "open_nodes", {"names": [query]})
+            operations.append(
+                {"server": "memory", "tool": "open_nodes", "result": exact_result}
+            )
+
+        return MemoryRouteResult(
+            handled=False,
+            route_reason="memory_evidence_injected",
+            evidence=_operations_to_evidence(operations),
+            operations=operations,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return MemoryRouteResult(
+            handled=False,
+            route_reason="memory_evidence_failed",
+            evidence=[
+                {
+                    "source": "mcp:memory:error",
+                    "kind": "mcp-tool-error",
+                    "content": str(exc),
+                }
+            ],
+            operations=[],
+        )
 
 
 def _handle_remember(
