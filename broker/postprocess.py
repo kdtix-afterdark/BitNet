@@ -1,12 +1,13 @@
-"""Deterministic output cleanup and checks for broker responses."""
+"""Deterministic output cleanup, repair, and checks for broker responses."""
 
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 
 _MARKDOWN_FENCE_RE = re.compile(r"^```(?:markdown|md)?\s*\n(?P<body>[\s\S]*?)\n```$")
+_HEADING_RE = re.compile(r"^(?P<level>#+)\s+(?P<title>.+?)\s*$", flags=re.MULTILINE)
 
 
 def strip_markdown_fence(text: str) -> str:
@@ -42,3 +43,43 @@ def postprocess_markdown(
     missing = find_missing_sections(cleaned, required_sections)
     return cleaned, missing
 
+
+def extract_sections(text: str) -> Dict[str, str]:
+    """Return a mapping of markdown heading text to section body."""
+    matches = list(_HEADING_RE.finditer(text))
+    sections: Dict[str, str] = {}
+    for index, match in enumerate(matches):
+        title = match.group("title").strip()
+        body_start = match.end()
+        body_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections[title] = text[body_start:body_end].strip()
+    return sections
+
+
+def repair_required_sections(
+    text: str,
+    required_sections: Iterable[str],
+    artifact_id: str,
+) -> str:
+    """Guarantee the required heading scaffold even when model output is weak."""
+    required = [section.strip() for section in required_sections if section.strip()]
+    if not required:
+        return normalize_markdown(text)
+
+    existing_sections = extract_sections(text)
+    repaired_blocks = []
+    for section in required:
+        body = existing_sections.get(section, "").strip()
+        if not body:
+            if section.lower() == "metadata":
+                body = (
+                    f"- artifact_id: {artifact_id}\n"
+                    "- status: incomplete\n"
+                    "- note: broker inserted this section because the model did not"
+                    " satisfy the required heading contract"
+                )
+            else:
+                body = "Not enough grounded content was produced for this required section."
+        repaired_blocks.append(f"# {section}\n{body}")
+
+    return "\n\n".join(repaired_blocks).rstrip() + "\n"

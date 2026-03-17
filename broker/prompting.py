@@ -61,6 +61,18 @@ def build_messages(
         user_parts.append(
             "Required headings:\n%s" % "\n".join("- %s" % section for section in sections)
         )
+        user_parts.append(
+            "Output contract:\n"
+            "- Return Markdown only.\n"
+            "- Start immediately with the first required heading.\n"
+            "- Use the required headings exactly as written and in the same order.\n"
+            "- Do not add any preamble before the first heading.\n"
+            '- If evidence is missing, write "Not enough evidence provided." under that heading.'
+        )
+        user_parts.append(
+            "Required template:\n%s"
+            % "\n\n".join("# %s\n..." % section for section in sections)
+        )
 
     return [
         {
@@ -72,4 +84,3 @@ def build_messages(
             "content": "\n\n".join(user_parts),
         },
     ]
-

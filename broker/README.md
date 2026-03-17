@@ -153,6 +153,7 @@ curl -s http://127.0.0.1:8091/artifacts/draft \
   unavailable. That is expected because startup is lazy.
 - The first model-backed request should start or attach to `llama-server`.
 - `/tools/run` should succeed even before the model starts.
-- `/artifacts/draft` may still report `missing_sections` if the model skips
-  required headings. That means the deterministic post-processing check is
-  working.
+- `/artifacts/draft` now applies a deterministic heading repair when the model
+  skips required sections.
+- In that case, the response includes `repair_applied: true`,
+  `original_draft`, and `missing_sections_before_repair`.

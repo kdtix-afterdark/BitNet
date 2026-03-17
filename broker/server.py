@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from .config import BrokerConfig
 from .llama_runtime import LlamaServerRuntime
-from .postprocess import postprocess_markdown
+from .postprocess import postprocess_markdown, repair_required_sections
 from .prompting import build_messages
 from .session_store import SessionStore
 from .tools import ToolRegistry, tool_result_to_evidence
@@ -136,14 +136,24 @@ class BrokerApp:
             max_tokens=body.get("max_tokens"),
             temperature=body.get("temperature"),
         )
-        cleaned, missing = postprocess_markdown(
+        cleaned, missing_before_repair = postprocess_markdown(
             response["choices"][0]["message"]["content"],
             required_sections,
         )
+        repair_applied = bool(required_sections and missing_before_repair)
+        repaired = (
+            repair_required_sections(cleaned, required_sections, artifact_id)
+            if repair_applied
+            else cleaned
+        )
+        remaining_missing = postprocess_markdown(repaired, required_sections)[1]
         return {
             "artifact_id": artifact_id,
-            "draft": cleaned,
-            "missing_sections": missing,
+            "draft": repaired,
+            "original_draft": cleaned,
+            "repair_applied": repair_applied,
+            "missing_sections": remaining_missing,
+            "missing_sections_before_repair": missing_before_repair,
             "evidence": evidence,
             "raw": response,
         }
