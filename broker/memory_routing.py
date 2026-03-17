@@ -114,6 +114,46 @@ def maybe_collect_memory_evidence(
         )
 
 
+def maybe_answer_from_memory_evidence(
+    prompt: str,
+    operations: Iterable[Dict[str, Any]],
+) -> Optional[MemoryRouteResult]:
+    """Return a deterministic broker-controlled answer from Memory evidence."""
+    prompt = prompt.strip()
+    if not prompt:
+        return None
+
+    entities = _extract_entities_from_operations(operations)
+    if not entities:
+        return None
+
+    lowered_prompt = prompt.lower()
+
+    if "summarize" in lowered_prompt or "summary" in lowered_prompt:
+        response = _format_memory_summary_sentence(entities)
+        if response:
+            return MemoryRouteResult(
+                handled=True,
+                response=response,
+                route_reason="broker_controlled_memory_summary",
+                evidence=_operations_to_evidence(operations),
+                operations=list(operations),
+            )
+
+    if "observation" in lowered_prompt and ("list" in lowered_prompt or "what" in lowered_prompt):
+        response = _format_memory_observations(entities)
+        if response:
+            return MemoryRouteResult(
+                handled=True,
+                response=response,
+                route_reason="broker_controlled_memory_observations",
+                evidence=_operations_to_evidence(operations),
+                operations=list(operations),
+            )
+
+    return None
+
+
 def _handle_remember(
     match: re.Match[str],
     mcp_registry: McpRegistry,
@@ -254,6 +294,20 @@ def _extract_entities(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [entity for entity in entities if isinstance(entity, dict)] if isinstance(entities, list) else []
 
 
+def _extract_entities_from_operations(
+    operations: Iterable[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    entities: List[Dict[str, Any]] = []
+    for operation in operations:
+        result = operation.get("result", {})
+        if not isinstance(result, dict):
+            continue
+        for entity in _extract_entities(result):
+            if entity not in entities:
+                entities.append(entity)
+    return entities
+
+
 def _extract_structured_content(payload: Dict[str, Any]) -> Dict[str, Any]:
     structured = payload.get("structuredContent", {})
     return structured if isinstance(structured, dict) else {}
@@ -275,6 +329,39 @@ def _format_entity_summary(query: str, entities: Iterable[Dict[str, Any]]) -> st
         else:
             summary_lines.append("- %s (%s)" % (name, entity_type))
     return "\n".join(summary_lines)
+
+
+def _format_memory_summary_sentence(entities: Iterable[Dict[str, Any]]) -> Optional[str]:
+    entity_list = list(entities)
+    if not entity_list:
+        return None
+
+    first = entity_list[0]
+    name = str(first.get("name", "Unknown")).strip()
+    entity_type = str(first.get("entityType", "entity")).strip()
+    observations = [
+        observation.strip()
+        for observation in first.get("observations", [])
+        if isinstance(observation, str) and observation.strip()
+    ]
+    if observations:
+        observation = observations[0]
+        return "%s is a %s: %s." % (name, entity_type, observation.rstrip("."))
+
+    return "%s is a %s stored in memory." % (name, entity_type)
+
+
+def _format_memory_observations(entities: Iterable[Dict[str, Any]]) -> Optional[str]:
+    observations: List[str] = []
+    for entity in entities:
+        for observation in entity.get("observations", []):
+            if isinstance(observation, str) and observation.strip():
+                observations.append(observation.strip())
+
+    if not observations:
+        return None
+
+    return "\n".join("- %s" % observation for observation in observations[:10])
 
 
 def _operations_to_evidence(operations: Iterable[Dict[str, Any]]) -> List[Dict[str, str]]:

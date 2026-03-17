@@ -195,6 +195,11 @@ For non-routed chat, you can also inject Memory results as evidence by passing
 - `include_tool_manifest` defaults to `true`
 - `broker_controls_tools` defaults to `false`, and can be switched on per call
 
+When `broker_controls_tools` is `true`, the broker may answer directly from
+Memory evidence for supported prompts such as short summaries and observation
+lists. In that case, `model_invoked` becomes `false` and `route_reason`
+describes the broker-controlled answer path.
+
 Artifact draft plus deterministic heading checks:
 
 ```bash

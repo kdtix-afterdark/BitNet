@@ -11,7 +11,11 @@ from urllib.parse import urlparse
 from .config import BrokerConfig
 from .llama_runtime import LlamaServerRuntime
 from .mcp import McpRegistry
-from .memory_routing import maybe_collect_memory_evidence, maybe_route_memory_prompt
+from .memory_routing import (
+    maybe_answer_from_memory_evidence,
+    maybe_collect_memory_evidence,
+    maybe_route_memory_prompt,
+)
 from .postprocess import (
     postprocess_markdown,
     repair_chat_response,
@@ -140,6 +144,34 @@ class BrokerApp:
         )
         if memory_evidence:
             evidence = memory_evidence + evidence
+
+        if broker_controls_tools and route_operations:
+            broker_control_result = maybe_answer_from_memory_evidence(
+                prompt,
+                route_operations,
+            )
+            if broker_control_result is not None and broker_control_result.handled:
+                return {
+                    "response": broker_control_result.response,
+                    "original_response": None,
+                    "repair_applied": False,
+                    "repair_reason": None,
+                    "route_applied": True,
+                    "route_reason": broker_control_result.route_reason,
+                    "route_operations": broker_control_result.operations or route_operations,
+                    "model_invoked": False,
+                    "memory_evidence_applied": bool(memory_evidence),
+                    "memory_evidence_reason": (
+                        memory_evidence_result.route_reason
+                        if memory_evidence_result is not None and memory_evidence
+                        else None
+                    ),
+                    "include_tool_manifest": include_tool_manifest,
+                    "broker_controls_tools": broker_controls_tools,
+                    "evidence": broker_control_result.evidence or memory_evidence,
+                    "raw": None,
+                }
+
         messages = build_messages(
             system_prompt=system_prompt,
             user_prompt=prompt,
