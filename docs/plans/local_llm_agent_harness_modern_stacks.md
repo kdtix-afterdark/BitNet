@@ -252,5 +252,84 @@ Adapters that do not recognise a requested profile name receive the
 
 ---
 
+## §12 — Session Ledger Event Model
+
+The session ledger model is implemented in `broker/durable_state.py`.
+
+### 12.1 Event-kind taxonomy
+
+Sixteen event kinds in six classes:
+
+| Class | Kind | Description |
+|---|---|---|
+| Policy | `session_opened` | A new session was started |
+| Policy | `session_closed` | A session was closed |
+| Policy | `profile_applied` | A run profile was applied |
+| Policy | `constraint_applied` | An operational constraint was applied |
+| User | `user_message` | A message submitted by the human caller |
+| User | `user_context` | Contextual information injected from the user layer |
+| Assistant | `assistant_message` | A final response produced by the model |
+| Assistant | `assistant_thinking` | An internal reasoning step |
+| Tool | `tool_invoked` | A tool was called |
+| Tool | `tool_result` | A tool returned a result |
+| Memory | `memory_read` | A memory-store query |
+| Memory | `memory_write` | A memory-store write |
+| Memory | `memory_sync` | A memory-store synchronisation checkpoint |
+| Artifact | `artifact_created` | A draft artifact was created |
+| Artifact | `artifact_updated` | A draft artifact was updated |
+| Artifact | `artifact_deleted` | A draft artifact was deleted |
+
+### 12.2 Visibility rules
+
+| Kind | model | user | ops |
+|---|---|---|---|
+| `session_opened` | — | — | ✓ |
+| `session_closed` | — | — | ✓ |
+| `profile_applied` | — | — | ✓ |
+| `constraint_applied` | — | — | ✓ |
+| `user_message` | ✓ | ✓ | ✓ |
+| `user_context` | ✓ | — | ✓ |
+| `assistant_message` | ✓ | ✓ | ✓ |
+| `assistant_thinking` | — | — | ✓ |
+| `tool_invoked` | ✓ | — | ✓ |
+| `tool_result` | ✓ | — | ✓ |
+| `memory_read` | ✓ | — | ✓ |
+| `memory_write` | — | — | ✓ |
+| `memory_sync` | — | — | ✓ |
+| `artifact_created` | — | ✓ | ✓ |
+| `artifact_updated` | — | ✓ | ✓ |
+| `artifact_deleted` | — | — | ✓ |
+
+### 12.3 Restart-safe reconstruction
+
+`SessionLedger` serialises all events to newline-delimited JSON via
+`to_jsonlines()`.  `SessionLedger.from_jsonlines()` deserialises and re-sorts
+by the monotone `sequence` counter to guarantee ordering on replay.
+
+### 12.4 Usage
+
+```python
+from broker.durable_state import SessionLedger, record_user_message, record_assistant_message
+from broker.session_store import SessionStore
+
+store = SessionStore()
+session = store.create(system_prompt="You are a helpful assistant.")
+ledger = store.get_ledger(session.session_id)
+
+# append events as the turn progresses
+ledger.record(record_user_message(session.session_id, ledger.next_sequence,
+                                  content="Hello", turn_index=0))
+ledger.record(record_assistant_message(session.session_id, ledger.next_sequence,
+                                       content="Hi!", turn_index=0))
+
+# persist
+jsonl = ledger.to_jsonlines()
+
+# restore
+restored = SessionLedger.from_jsonlines(session.session_id, jsonl)
+```
+
+---
+
 _Last updated: 2026-03-21_
 _Owner: US-LAH-001_
