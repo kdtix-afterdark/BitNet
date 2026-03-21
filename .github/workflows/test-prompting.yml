@@ -1,0 +1,75 @@
+# Context Compiler regression tests — TASK-LAH-004
+#
+# Runs the full broker prompt-assembly and context-compiler test suite on
+# every push and pull-request that touches the relevant source files.
+#
+# What this covers (GitHub-hosted runners)
+# -----------------------------------------
+# - broker/prompting.py  — all prompt-assembly helpers and the context compiler
+# - broker/durable_state.py  — ledger round-trip and visibility rules
+# - broker/session_store.py  — session seeding
+# - broker/run_profile.py    — run-profile capability matrix
+# - tests/test_prompting.py  — 82 regression tests (TASK-LAH-004)
+# - tests/test_durable_state.py — 51 regression tests (TASK-LAH-003)
+#
+# What requires local Apple Silicon + Metal UAT
+# ----------------------------------------------
+# The following scenarios cannot be exercised in GitHub-hosted CI because
+# they require a live GGUF model loaded on Apple Silicon via llama-server
+# with Metal acceleration:
+#   1. End-to-end /chat round-trips through compile_context_from_ledger() →
+#      LlamaServerRuntime.chat() → repair pipeline.
+#   2. Token-budget enforcement (ctx_size, max_new_tokens) under real model
+#      generation.
+#   3. Multi-turn session continuity across HTTP restart boundaries.
+#   4. Memory MCP server integration (mcp_memory_call) with real Knowledge
+#      Graph data.
+# These are tracked in the local UAT checklist in the TASK-LAH-004 artifact.
+
+name: Context Compiler Tests
+
+on:
+  push:
+    paths:
+      - "broker/prompting.py"
+      - "broker/durable_state.py"
+      - "broker/session_store.py"
+      - "broker/run_profile.py"
+      - "broker/turn_trace.py"
+      - "tests/test_prompting.py"
+      - "tests/test_durable_state.py"
+      - ".github/workflows/test-prompting.yml"
+  pull_request:
+    paths:
+      - "broker/prompting.py"
+      - "broker/durable_state.py"
+      - "broker/session_store.py"
+      - "broker/run_profile.py"
+      - "broker/turn_trace.py"
+      - "tests/test_prompting.py"
+      - "tests/test_durable_state.py"
+      - ".github/workflows/test-prompting.yml"
+
+jobs:
+  test:
+    name: Prompt assembly and context compiler
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Run context compiler tests
+        run: python -m pytest tests/test_prompting.py tests/test_durable_state.py -v
