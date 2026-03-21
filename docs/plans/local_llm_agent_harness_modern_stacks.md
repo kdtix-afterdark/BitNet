@@ -194,5 +194,63 @@ Evidence items are `dict` values with three canonical keys:
 
 ---
 
+## §11 — Run Profile and Capability Matrix
+
+The canonical run profile model is implemented in `broker/run_profile.py`.
+
+### 11.1 Sub-policy dataclasses
+
+Four composable dataclasses express profile behaviour without embedding
+provider-specific names.
+
+| Dataclass | Purpose |
+|---|---|
+| `SandboxPolicy` | Execution permissions: read / write / network / exec |
+| `ToolAccess` | Which broker and MCP tool categories are enabled |
+| `MemoryPolicy` | Memory-routing priority and auto-store behaviour |
+| `ModelBudget` | Context window, max-new-tokens, and temperature |
+
+### 11.2 RunProfile
+
+A `RunProfile` binds the four sub-policies together with a `name`,
+`description`, and `model_family` hint so that adapters can select a
+concrete model without provider names appearing in planning artifacts.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `str` | Unique profile identifier (key in matrix) |
+| `description` | `str` | Human-readable use-case summary |
+| `model_family` | `str` | Coarse capacity tier: `"fast"`, `"balanced"`, `"high-capacity"` |
+| `tool_access` | `ToolAccess` | Tool-category permissions |
+| `memory_policy` | `MemoryPolicy` | Memory-routing configuration |
+| `sandbox_policy` | `SandboxPolicy` | Execution permissions |
+| `budget` | `ModelBudget` | Token and temperature budget |
+
+### 11.3 Canonical capability matrix
+
+| Profile | `model_family` | fs read | fs write | mcp memory | seq-thinking | ctx7 | mcp custom | memory routing | allow write | allow network | ctx | max tokens | temp |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `default` | balanced | ✓ | — | — | — | — | — | model_first | — | — | 2 048 | 512 | 0.2 |
+| `read_only` | fast | ✓ | — | — | — | — | — | model_first | — | — | 2 048 | 256 | 0.1 |
+| `memory_first` | balanced | ✓ | — | ✓ | — | — | — | memory_first | ✓ | — | 4 096 | 512 | 0.2 |
+| `tool_heavy` | high-capacity | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | memory_first | ✓ | ✓ | 8 192 | 1 024 | 0.3 |
+| `thinking` | high-capacity | ✓ | — | — | ✓ | — | — | model_first | — | — | 8 192 | 2 048 | 0.4 |
+
+### 11.4 Usage
+
+```python
+from broker.run_profile import resolve_profile
+
+profile = resolve_profile("memory_first")
+if profile.memory_policy.enabled:
+    # activate memory routing …
+    pass
+```
+
+Adapters that do not recognise a requested profile name receive the
+`"default"` profile as a safe fallback via `resolve_profile()`.
+
+---
+
 _Last updated: 2026-03-21_
 _Owner: US-LAH-001_
