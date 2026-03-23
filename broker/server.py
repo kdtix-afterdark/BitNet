@@ -340,7 +340,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threads", type=int, default=None, help="Generation threads")
     parser.add_argument("--ctx-size", type=int, default=None, help="Model context size")
     parser.add_argument("--n-predict", type=int, default=None, help="Default max tokens")
+    parser.add_argument("--n-keep", type=int, default=None, help="Tokens to keep on context shift (-1 = all)")
     parser.add_argument("--temperature", type=float, default=None, help="Default temperature")
+    parser.add_argument("--top-p", type=float, default=None, help="Top-p nucleus sampling threshold")
+    parser.add_argument("--gpu-layers", type=int, default=None, help="GPU layers to offload (0 = CPU-only, 999 = all)")
     return parser
 
 
@@ -362,8 +365,14 @@ def apply_cli_overrides(config: BrokerConfig, args: argparse.Namespace) -> Broke
         config.ctx_size = args.ctx_size
     if args.n_predict is not None:
         config.n_predict = args.n_predict
+    if args.n_keep is not None:
+        config.n_keep = args.n_keep
     if args.temperature is not None:
         config.temperature = args.temperature
+    if args.top_p is not None:
+        config.top_p = args.top_p
+    if args.gpu_layers is not None:
+        config.gpu_layers = args.gpu_layers
     return config
 
 

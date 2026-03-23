@@ -35,7 +35,10 @@ class BrokerConfig:
     threads: int
     ctx_size: int
     n_predict: int
+    n_keep: int
     temperature: float
+    top_p: float
+    gpu_layers: int
     startup_timeout: int
     request_timeout: int
     log_dir: Path
@@ -60,12 +63,14 @@ class BrokerConfig:
             )
         ).resolve()
 
-        llama_server_path = Path(
-            os.environ.get(
-                "BITNET_LLAMA_SERVER_PATH",
-                workspace_root / "build" / "bin" / "llama-server",
-            )
-        ).resolve()
+        # Auto-detect: prefer build-metal/ (GPU) over build/ (CPU) when the
+        # env var is not set explicitly.
+        if "BITNET_LLAMA_SERVER_PATH" in os.environ:
+            llama_server_path = Path(os.environ["BITNET_LLAMA_SERVER_PATH"]).resolve()
+        else:
+            metal_path = workspace_root / "build-metal" / "bin" / "llama-server"
+            cpu_path = workspace_root / "build" / "bin" / "llama-server"
+            llama_server_path = metal_path if metal_path.exists() else cpu_path
 
         log_dir = Path(
             os.environ.get("BITNET_BROKER_LOG_DIR", workspace_root / "broker_logs")
@@ -82,7 +87,10 @@ class BrokerConfig:
             threads=_env_int("BITNET_BROKER_THREADS", 2),
             ctx_size=_env_int("BITNET_BROKER_CTX_SIZE", 2048),
             n_predict=_env_int("BITNET_BROKER_N_PREDICT", 512),
+            n_keep=_env_int("BITNET_BROKER_N_KEEP", -1),
             temperature=_env_float("BITNET_BROKER_TEMPERATURE", 0.2),
+            top_p=_env_float("BITNET_BROKER_TOP_P", 0.9),
+            gpu_layers=_env_int("BITNET_BROKER_GPU_LAYERS", 0),
             startup_timeout=_env_int("BITNET_BROKER_STARTUP_TIMEOUT", 120),
             request_timeout=_env_int("BITNET_BROKER_REQUEST_TIMEOUT", 180),
             log_dir=log_dir,

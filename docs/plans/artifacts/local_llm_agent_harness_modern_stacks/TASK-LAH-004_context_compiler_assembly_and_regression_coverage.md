@@ -208,6 +208,160 @@ The regression suite is in `tests/test_prompting.py` and is run by
 | Memory MCP server integration with real Knowledge Graph data | Requires a running memory MCP server process |
 | Temperature and sampling behaviour validation | Requires live model generation |
 
+### Metal UAT bootstrap (Apple Silicon lab)
+
+The verified local bootstrap path uses a dedicated `build-metal/` tree and
+attaches the broker to a manually-started `llama-server`.  The broker's
+`_attach_to_existing_server()` path is the correct approach for Metal UAT
+because the managed-runtime path (`ensure_started()`) would start its own
+`llama-server` instance with the wrong flags.
+
+**Step 1 — initialise submodules and generate kernel headers**
+
+```bash
+cd /path/to/BitNet
+git submodule update --init --recursive
+python3 utils/codegen_tl1.py --outdir include/
+```
+
+**Step 2 — build with Apple clang into a dedicated Metal tree**
+
+Use Apple clang (not Homebrew clang) to avoid `ggml-blas.cpp` build failures
+on current macOS SDKs:
+
+```bash
+cmake -B build-metal \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_METAL=ON \
+  -DCMAKE_C_COMPILER=$(xcrun -f clang) \
+  -DCMAKE_CXX_COMPILER=$(xcrun -f clang++)
+cmake --build build-metal --config Release -j$(sysctl -n hw.logicalcpu)
+# Binary lands at: build-metal/bin/llama-server
+```
+
+**Step 3 — start llama-server manually with Metal flags** (terminal 1)
+
+```bash
+./build-metal/bin/llama-server \
+  -m /path/to/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf \
+  -c 4096 \
+  -t 10 \
+  -n 4096 \
+  --keep -1 \
+  -ngl 999 \
+  --temp 0.5 \
+  --top-p 0.9 \
+  --host 127.0.0.1 \
+  --port 8080 \
+  --slots -cb
+```
+
+**Step 4 — start the broker, attached to the running llama-server** (terminal 2)
+
+The broker auto-attaches to the running server on port 8080; no managed
+process is started.  `BITNET_LLAMA_SERVER_PATH` is not needed because the
+broker uses `_attach_to_existing_server()` before attempting to spawn one.
+
+```bash
+export BITNET_BROKER_MODEL=/path/to/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
+export BITNET_BROKER_GPU_LAYERS=999
+export BITNET_BROKER_CTX_SIZE=4096
+export BITNET_BROKER_N_PREDICT=4096
+export BITNET_BROKER_N_KEEP=-1
+export BITNET_BROKER_TEMPERATURE=0.5
+export BITNET_BROKER_TOP_P=0.9
+python -m broker.server
+```
+
+Or equivalently via CLI flags:
+
+```bash
+python -m broker.server \
+  --model /path/to/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf \
+  --ctx-size 4096 \
+  --n-predict 4096 \
+  --n-keep -1 \
+  --temperature 0.5 \
+  --top-p 0.9 \
+  --gpu-layers 999
+```
+
+**Step 5 — UAT scenario 1: basic `/chat` round-trip**
+
+```bash
+curl -s -X POST http://127.0.0.1:8091/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "What is 2 + 2?"}' | python3 -m json.tool
+# Expect: response field non-empty, model_invoked=true
+```
+
+**Step 6 — UAT scenario 2: multi-turn restart continuity**
+
+```bash
+# Turn 1
+curl -s -X POST http://127.0.0.1:8091/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "My name is Alice.", "session_id": "uat-1"}' | python3 -m json.tool
+
+# Restart broker (terminal 2); llama-server stays running in terminal 1
+# Turn 2 — session resumes from ledger
+curl -s -X POST http://127.0.0.1:8091/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "What is my name?", "session_id": "uat-1"}' | python3 -m json.tool
+# Expect: response mentions "Alice"
+```
+
+**Step 7 — UAT scenario 3: memory MCP integration**
+
+Start the memory MCP server before the broker (terminal 0):
+
+```bash
+npm install --prefix broker
+bash broker/run_memory_mcp.sh
+```
+
+Then:
+
+```bash
+curl -s -X POST http://127.0.0.1:8091/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "Remember that the project deadline is March 31.", "profile": "memory_first"}' \
+  | python3 -m json.tool
+# Expect: route_operations contains a memory write entry
+
+curl -s -X POST http://127.0.0.1:8091/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "When is the project deadline?", "profile": "memory_first"}' \
+  | python3 -m json.tool
+# Expect: response contains "March 31"
+```
+
+**Health check (any time)**
+
+```bash
+curl -s http://127.0.0.1:8091/health | python3 -m json.tool
+# Expect: status=ok, llama_server.status=ok
+```
+
+### CPU-only UAT (no Metal)
+
+For CPU-only testing (no GPU offload), set `BITNET_BROKER_GPU_LAYERS=0` (the
+default) and build into the standard `build/` tree:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j$(sysctl -n hw.logicalcpu)
+
+python -m broker.server \
+  --model /path/to/ggml-model-i2_s.gguf \
+  --ctx-size 2048 \
+  --n-predict 512 \
+  --gpu-layers 0
+```
+
+The broker discovers `build/bin/llama-server` automatically when `build-metal/`
+does not exist.
+
 ---
 
 ## Constraints applied
