@@ -8,6 +8,9 @@ Covers:
 4. TurnResult dataclass: required fields, optional-field defaults, list defaults.
 5. TURN_RESULT_VISIBILITY: completeness (all TurnResult fields mapped), and
    correctness of per-field audience assignments.
+
+Run:
+    pytest tests/test_turn_trace.py -v
 """
 
 import pytest

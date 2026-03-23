@@ -11,6 +11,9 @@ Covers:
 7. resolve_profile(): known names return the correct profile; unknown
    names fall back to the "default" profile.
 8. PROFILE_NAMES: contains exactly the five canonical names.
+
+Run:
+    pytest tests/test_run_profile.py -v
 """
 
 import pytest
