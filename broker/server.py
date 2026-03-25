@@ -10,8 +10,10 @@ from urllib.parse import urlparse
 
 from .config import BrokerConfig
 from .llama_runtime import LlamaServerRuntime
+from .logging_config import BrokerLogger, standard_log_dir
 from .mcp import McpRegistry
 from .memory_routing import (
+    collect_memory_evidence_for_profile,
     maybe_answer_from_memory_evidence,
     maybe_collect_memory_evidence,
     maybe_route_memory_prompt,
@@ -22,7 +24,7 @@ from .postprocess import (
     repair_required_sections,
 )
 from .prompting import build_messages
-from .session_store import SessionStore
+from .session_store import SessionStore, load_persisted_session, persist_messages
 from .tools import ToolRegistry, tool_result_to_evidence
 
 
@@ -35,22 +37,32 @@ class BrokerApp:
 
     def __init__(self, config: BrokerConfig) -> None:
         self.config = config
+        self._state_dir = config.workspace_root / "broker_state"
         self.sessions = SessionStore()
         self.runtime = LlamaServerRuntime(config)
         self.mcp_registry = McpRegistry(config)
         self.tools = ToolRegistry(config.workspace_root, self.mcp_registry)
+        self.logger = BrokerLogger.for_component(
+            "broker",
+            verbose=config.verbose,
+            debug_level=config.debug_level,
+            log_dir=standard_log_dir(config.workspace_root, "broker"),
+        )
+
 
     def build_health(self) -> Dict[str, Any]:
         """Return a combined broker + model health view."""
+        self.logger.debug("Health check requested")
         try:
             model_health = self.runtime.health()
         except Exception as exc:  # noqa: BLE001
+            self.logger.error("Health check: llama-server unavailable: %s" % exc)
             model_health = {
                 "status": "unavailable",
                 "error": str(exc),
             }
 
-        return {
+        health = {
             "status": "ok",
             "broker": {
                 "host": self.config.broker_host,
@@ -59,9 +71,16 @@ class BrokerApp:
                 "model_path": str(self.config.model_path),
                 "tools": self.tools.list_tools(),
                 "mcp_servers": self.mcp_registry.list_servers(),
+                "log_dir": str(
+                    standard_log_dir(self.config.workspace_root, "broker")
+                ),
             },
             "llama_server": model_health,
         }
+        self.logger.debug(
+            "Health: llama_server.status=%s" % model_health.get("status", "unknown")
+        )
+        return health
 
     def collect_evidence(self, body: Dict[str, Any]) -> List[Dict[str, str]]:
         """Merge explicit evidence with deterministic tool results."""
@@ -97,6 +116,7 @@ class BrokerApp:
     def run_tools(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Execute deterministic tool calls without involving the model."""
         results = [self.tools.run_tool_call(call) for call in body.get("tool_calls", [])]
+        self.logger.debug("run_tools: %d tool(s) executed" % len(results))
         return {"results": results}
 
     def chat(self, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -105,12 +125,50 @@ class BrokerApp:
         if not prompt:
             raise ValueError("chat requests require a non-empty prompt")
         session_id = self._normalize_session_id(body.get("session_id"))
+        profile = body.get("profile")
         include_tool_manifest = bool(body.get("include_tool_manifest", True))
         broker_controls_tools = bool(body.get("broker_controls_tools", False))
         memory_query = body.get("memory_query")
 
+        self.logger.info(
+            "Chat request: session=%s profile=%s prompt_len=%d"
+            % (session_id or "anon", profile or "default", len(prompt))
+        )
+        self.logger.trace("Chat prompt: %s" % prompt)
+
+        # Restore session from disk if the broker was restarted or session is unknown.
+        if session_id and self.sessions.get(session_id) is None:
+            persisted = load_persisted_session(self._state_dir, session_id)
+            if persisted is not None:
+                loaded_messages, loaded_system_prompt = persisted
+                self.sessions.restore(
+                    session_id=session_id,
+                    messages=loaded_messages,
+                    system_prompt=loaded_system_prompt or DEFAULT_CHAT_PROMPT,
+                )
+                self.logger.info(
+                    "Session %s restored from disk (%d prior turns)"
+                    % (session_id, sum(1 for m in loaded_messages if m.get("role") == "assistant"))
+                )
+            else:
+                # No persisted state found — seed a fresh in-memory entry so
+                # turns accumulate and are persisted on the first response.
+                # We reuse `restore()` here because it accepts an explicit
+                # session_id, whereas `create()` generates a random UUID.
+                self.sessions.restore(
+                    session_id=session_id,
+                    messages=[],
+                    system_prompt=self._resolve_system_prompt(body, DEFAULT_CHAT_PROMPT),
+                )
+                self.logger.debug("Session %s: new session initialised" % session_id)
+
         memory_route = maybe_route_memory_prompt(prompt, self.mcp_registry)
         if memory_route is not None and memory_route.handled:
+            self.logger.info(
+                "Memory route handled: reason=%s ops=%d"
+                % (memory_route.route_reason, len(memory_route.operations or []))
+            )
+            self._append_session_turn(session_id, prompt, memory_route.response or "")
             return {
                 "response": memory_route.response,
                 "original_response": None,
@@ -133,6 +191,15 @@ class BrokerApp:
             self.mcp_registry,
             explicit_query=memory_query if isinstance(memory_query, str) else None,
         )
+        # If no memory evidence from the standard path and the profile requests
+        # memory-first behaviour, try again using the prompt as the query.
+        if memory_evidence_result is None:
+            memory_evidence_result = collect_memory_evidence_for_profile(
+                prompt=prompt,
+                profile=profile if isinstance(profile, str) else None,
+                mcp_registry=self.mcp_registry,
+                explicit_query=memory_query if isinstance(memory_query, str) else None,
+            )
         memory_evidence = (
             list(memory_evidence_result.evidence or [])
             if memory_evidence_result is not None
@@ -179,6 +246,13 @@ class BrokerApp:
             if session is not None:
                 conversation_history = list(session.messages)
 
+        self.logger.debug(
+            "Building messages: history_turns=%d evidence=%d"
+            % (len(conversation_history) // 2, len(evidence))
+        )
+        if self.logger.is_enabled_for_trace():
+            self.logger.trace("Conversation history: %s" % json.dumps(conversation_history))
+
         messages = build_messages(
             system_prompt=system_prompt,
             user_prompt=prompt,
@@ -188,6 +262,7 @@ class BrokerApp:
             broker_controls_tools=broker_controls_tools,
             grounded_user_prompt=bool(evidence),
         )
+        self.logger.debug("Invoking llama-server: messages=%d" % len(messages))
         response = self.runtime.chat(
             messages=messages,
             max_tokens=body.get("max_tokens"),
@@ -199,6 +274,11 @@ class BrokerApp:
             text=content,
             evidence_items=evidence,
         )
+        self.logger.info(
+            "Chat complete: session=%s repair=%s response_len=%d"
+            % (session_id or "anon", repair_applied, len(repaired_content))
+        )
+        self.logger.trace("Chat response: %s" % repaired_content[:500])
         self._append_session_turn(session_id, prompt, repaired_content)
         return {
             "response": repaired_content,
@@ -281,7 +361,7 @@ class BrokerApp:
         user_prompt: str,
         assistant_response: str,
     ) -> None:
-        """Append user and assistant turns to the session message history."""
+        """Append user and assistant turns to the session message history and persist to disk."""
         if not session_id:
             return
         if not assistant_response.strip():
@@ -291,6 +371,18 @@ class BrokerApp:
             self.sessions.append_message(session_id, "assistant", assistant_response)
         except ValueError:
             pass
+        # Persist to disk so turns survive a broker restart.
+        session = self.sessions.get(session_id)
+        if session is not None:
+            try:
+                persist_messages(
+                    self._state_dir,
+                    session_id,
+                    list(session.messages),
+                    system_prompt=session.system_prompt,
+                )
+            except OSError:
+                pass
 
     def close(self) -> None:
         """Release broker-managed resources."""
@@ -340,13 +432,15 @@ class BrokerRequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(404, {"error": "not_found"})
         except ValueError as exc:
+            self.app.logger.error("Bad request [%s]: %s" % (parsed.path, exc))
             self._send_json(400, {"error": str(exc)})
         except Exception as exc:  # noqa: BLE001
+            self.app.logger.error("Internal error [%s]: %s" % (parsed.path, exc))
             self._send_json(500, {"error": str(exc)})
 
     def log_message(self, format: str, *args: Any) -> None:
-        """Keep broker output quiet by default."""
-        return
+        """Route HTTP access log through BrokerLogger instead of stderr."""
+        self.app.logger.debug("HTTP %s" % (format % args))
 
     def _read_json(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -379,6 +473,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpu-layers", type=int, default=None, help="GPU layers to offload (0 = CPU-only, 999 = all)")
     parser.add_argument("--batch-size", type=int, default=None, help="Logical batch size for llama-server (-b). Defaults to 31 for i2_s models (BLAS crash safeguard).")
     parser.add_argument("--ubatch-size", type=int, default=None, help="Physical micro-batch size for llama-server (-ub). Defaults to 31 for i2_s models (BLAS crash safeguard).")
+    parser.add_argument(
+        "--verbose", type=int, default=None, choices=[0, 1, 2, 3],
+        metavar="LEVEL",
+        help="Console and log verbosity: 0=error, 1=info (default), 2=debug, 3=trace. "
+             "Also settable via BITNET_BROKER_VERBOSE.",
+    )
+    parser.add_argument(
+        "--debug", type=int, default=None, choices=[0, 1, 2, 3],
+        metavar="LEVEL",
+        dest="debug_level",
+        help="Debug instrumentation depth: 0=off (default) … 3=deep trace. "
+             "Also settable via BITNET_BROKER_DEBUG.",
+    )
     return parser
 
 
@@ -412,6 +519,10 @@ def apply_cli_overrides(config: BrokerConfig, args: argparse.Namespace) -> Broke
         config.batch_size = args.batch_size
     if args.ubatch_size is not None:
         config.ubatch_size = args.ubatch_size
+    if getattr(args, "verbose", None) is not None:
+        config.verbose = max(0, min(3, args.verbose))
+    if getattr(args, "debug_level", None) is not None:
+        config.debug_level = max(0, min(3, args.debug_level))
     return config
 
 
@@ -422,19 +533,32 @@ def main() -> None:
     config = apply_cli_overrides(BrokerConfig.from_env(), args)
     app = BrokerApp(config)
 
+    log_dir = standard_log_dir(config.workspace_root, "broker")
+    latest_log = log_dir / "broker-latest.log"
+    app.logger.info(
+        "Broker starting: verbose=%d debug=%d log=%s"
+        % (config.verbose, config.debug_level, latest_log)
+    )
+    app.logger.info(
+        "Listening on http://%s:%d" % (config.broker_host, config.broker_port)
+    )
+    app.logger.info(
+        "llama-server target: http://%s:%d" % (config.llama_host, config.llama_port)
+    )
+    app.logger.debug("model_path=%s" % config.model_path)
+    app.logger.debug("state_dir=%s" % app._state_dir)
+
+    print(
+        "Starting BitNet broker on http://%s:%d" % (config.broker_host, config.broker_port)
+    )
+    print("Logs: %s" % latest_log)
+
     server = BrokerHTTPServer((config.broker_host, config.broker_port), app)
     try:
-        print(
-            "Starting BitNet broker on http://%s:%d"
-            % (config.broker_host, config.broker_port)
-        )
-        print(
-            "Managed llama-server target is http://%s:%d"
-            % (config.llama_host, config.llama_port)
-        )
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
+        app.logger.info("Broker shutting down")
+
     finally:
         app.close()
         app.runtime.stop()

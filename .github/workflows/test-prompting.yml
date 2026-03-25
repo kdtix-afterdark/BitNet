@@ -1,19 +1,25 @@
 # Context Compiler regression tests — TASK-LAH-001 through TASK-LAH-004
 #
-# Runs the full broker contract, run-profile, ledger, and context-compiler
-# test suite on every push and pull-request that touches the relevant sources.
+# Runs the full broker contract, run-profile, ledger, context-compiler,
+# memory-routing, session-persistence, and logging-config test suite on
+# every push and pull-request that touches the relevant sources.
 #
 # What this covers (GitHub-hosted runners)
 # -----------------------------------------
-# - broker/turn_trace.py     — Event, TurnResult, VisibilityFlags contracts
-# - broker/run_profile.py    — run-profile capability matrix
-# - broker/durable_state.py  — ledger round-trip and visibility rules
-# - broker/session_store.py  — session seeding
-# - broker/prompting.py      — all prompt-assembly helpers and context compiler
+# - broker/turn_trace.py       — Event, TurnResult, VisibilityFlags contracts
+# - broker/run_profile.py      — run-profile capability matrix
+# - broker/durable_state.py    — ledger round-trip and visibility rules
+# - broker/session_store.py    — session seeding + disk persistence
+# - broker/prompting.py        — all prompt-assembly helpers and context compiler
+# - broker/memory_routing.py   — memory routing patterns and profile-aware evidence
+# - broker/config.py           — verbose/debug config fields
+# - broker/logging_config.py   — BrokerLogger, log file capture, level filtering
 # - tests/test_turn_trace.py              — 60 regression tests (TASK-LAH-001)
 # - tests/test_run_profile.py             — 78 regression tests (TASK-LAH-002)
 # - tests/test_durable_state.py           — 51 regression tests (TASK-LAH-003)
-# - tests/test_prompting.py               — 82 regression tests (TASK-LAH-004)
+# - tests/test_prompting.py               — 89 regression tests (TASK-LAH-004)
+# - tests/test_memory_routing.py          — memory routing + disk persistence
+# - tests/test_logging_config.py          — BrokerLogger + verbose/debug config
 # - tests/test_llama_cpp_blas_contract.py — 6 source-level guards (skipped in CI
 #                                           when submodule is not checked out)
 #
@@ -41,10 +47,16 @@ on:
       - "broker/session_store.py"
       - "broker/run_profile.py"
       - "broker/turn_trace.py"
+      - "broker/memory_routing.py"
+      - "broker/config.py"
+      - "broker/logging_config.py"
+      - "broker/server.py"
       - "tests/test_turn_trace.py"
       - "tests/test_run_profile.py"
       - "tests/test_durable_state.py"
       - "tests/test_prompting.py"
+      - "tests/test_memory_routing.py"
+      - "tests/test_logging_config.py"
       - "tests/test_llama_cpp_blas_contract.py"
       - ".github/workflows/test-prompting.yml"
   pull_request:
@@ -54,16 +66,22 @@ on:
       - "broker/session_store.py"
       - "broker/run_profile.py"
       - "broker/turn_trace.py"
+      - "broker/memory_routing.py"
+      - "broker/config.py"
+      - "broker/logging_config.py"
+      - "broker/server.py"
       - "tests/test_turn_trace.py"
       - "tests/test_run_profile.py"
       - "tests/test_durable_state.py"
       - "tests/test_prompting.py"
+      - "tests/test_memory_routing.py"
+      - "tests/test_logging_config.py"
       - "tests/test_llama_cpp_blas_contract.py"
       - ".github/workflows/test-prompting.yml"
 
 jobs:
   test:
-    name: Broker contracts, run profiles, ledger, and context compiler
+    name: Broker contracts, run profiles, ledger, context compiler, memory routing, and logging
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -82,5 +100,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest
 
-      - name: Run all broker contract and context compiler tests
-        run: python -m pytest tests/test_turn_trace.py tests/test_run_profile.py tests/test_durable_state.py tests/test_prompting.py tests/test_llama_cpp_blas_contract.py -v
+      - name: Run all broker tests
+        run: |
+          python -m pytest \
+            tests/test_turn_trace.py \
+            tests/test_run_profile.py \
+            tests/test_durable_state.py \
+            tests/test_prompting.py \
+            tests/test_memory_routing.py \
+            tests/test_logging_config.py \
+            tests/test_llama_cpp_blas_contract.py \
+            -v

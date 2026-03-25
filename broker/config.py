@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 def _env_int(name: str, default: int) -> int:
@@ -19,6 +20,11 @@ def _env_float(name: str, default: float) -> float:
     if value is None:
         return default
     return float(value)
+
+
+def _env_int_clamped(name: str, default: int, lo: int, hi: int) -> int:
+    """Read an env-var int clamped to [lo, hi]."""
+    return max(lo, min(hi, _env_int(name, default)))
 
 
 @dataclass
@@ -48,6 +54,28 @@ class BrokerConfig:
     mcp_startup_timeout: int
     mcp_request_timeout: int
     mcp_protocol_version: str
+    # Logging controls
+    verbose: int = 1       # 0=error, 1=info, 2=debug, 3=trace
+    debug_level: int = 0   # 0=off … 3=deep trace (component-specific)
+
+    def apply_cli_overrides(
+        self,
+        verbose: Optional[int] = None,
+        debug_level: Optional[int] = None,
+        **kwargs: object,
+    ) -> "BrokerConfig":
+        """Apply optional keyword overrides to this config instance.
+
+        All parameters are optional; passing ``None`` leaves the existing
+        value unchanged.  This is the instance-level counterpart to the
+        standalone ``apply_cli_overrides()`` function in ``broker/server.py``
+        (which handles the full ``argparse.Namespace`` overlay).
+        """
+        if verbose is not None:
+            self.verbose = max(0, min(3, int(verbose)))
+        if debug_level is not None:
+            self.debug_level = max(0, min(3, int(debug_level)))
+        return self
 
     @classmethod
     def from_env(cls) -> "BrokerConfig":
@@ -126,4 +154,6 @@ class BrokerConfig:
                 "BITNET_MCP_PROTOCOL_VERSION",
                 "2025-03-26",
             ),
+            verbose=_env_int_clamped("BITNET_BROKER_VERBOSE", 1, 0, 3),
+            debug_level=_env_int_clamped("BITNET_BROKER_DEBUG", 0, 0, 3),
         )

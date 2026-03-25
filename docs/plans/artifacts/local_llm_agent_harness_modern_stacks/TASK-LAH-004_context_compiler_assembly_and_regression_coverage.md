@@ -310,6 +310,8 @@ export BITNET_BROKER_TEMPERATURE=0.5
 export BITNET_BROKER_TOP_P=0.9
 export BITNET_BROKER_BATCH_SIZE=2048
 export BITNET_BROKER_UBATCH_SIZE=512
+export BITNET_BROKER_VERBOSE=2      # 0=error 1=info 2=debug 3=trace
+export BITNET_BROKER_DEBUG=1        # 0=off 1=basic 2=verbose 3=deep trace
 python3 -m broker.server
 ```
 
@@ -326,8 +328,20 @@ python3 -m broker.server \
   --top-p 0.9 \
   --gpu-layers 999
   --batch-size 2048 \
-  --ubatch-size 512
+  --ubatch-size 512 \
+  --verbose 2 \
+  --debug 1
 ```
+
+Broker logs land automatically in `{workspace_root}/logs/broker/`:
+
+```
+logs/broker/broker-YYYYMMDD-HHMMSS.log   # session archive
+logs/broker/broker-latest.log            # always the most recent run
+```
+
+When submitting UAT reports, attach `logs/broker/broker-latest.log` along
+with any scenario-specific curl output.  No manual log redirection is needed.
 
 **Step 5 — UAT scenario 1: basic `/chat` round-trip**
 
@@ -347,43 +361,51 @@ curl -s -X POST http://127.0.0.1:8091/chat \
   -d '{"prompt": "My name is Alice.", "session_id": "uat-1"}' | python3 -m json.tool
 
 # Restart broker (terminal 2); llama-server stays running in terminal 1
-# Turn 2 — session resumes from ledger
+# Turn 2 — session history is loaded from broker_state/sessions/uat-1.json
 curl -s -X POST http://127.0.0.1:8091/chat \
   -H 'Content-Type: application/json' \
   -d '{"prompt": "What is my name?", "session_id": "uat-1"}' | python3 -m json.tool
 # Expect: response mentions "Alice"
+# Note: broker logs "Session uat-1 restored from disk" at INFO level.
 ```
 
 **Step 7 — UAT scenario 3: memory MCP integration**
 
-Start the memory MCP server before the broker (terminal 0):
+Install the memory MCP npm package (one-time setup):
 
 ```bash
 npm install --prefix broker
-bash broker/run_memory_mcp.sh
 ```
 
-Then:
+Then start the broker (memory MCP server is launched on-demand as a subprocess):
 
 ```bash
+BITNET_BROKER_VERBOSE=2 python3 -m broker.server
+```
+
+Run the memory scenarios:
+
+```bash
+# Turn 1 — natural language "remember that" form routes to MCP memory write
 curl -s -X POST http://127.0.0.1:8091/chat \
   -H 'Content-Type: application/json' \
   -d '{"prompt": "Remember that the project deadline is March 31.", "profile": "memory_first"}' \
   | python3 -m json.tool
-# Expect: route_operations contains a memory write entry
+# Expect: route_applied=true, route_operations contains create_entities or add_observations
 
+# Turn 2 — profile=memory_first auto-queries memory for the prompt
 curl -s -X POST http://127.0.0.1:8091/chat \
   -H 'Content-Type: application/json' \
   -d '{"prompt": "When is the project deadline?", "profile": "memory_first"}' \
   | python3 -m json.tool
-# Expect: response contains "March 31"
+# Expect: response contains "March 31" or evidence contains memory entry
 ```
 
 **Health check (any time)**
 
 ```bash
 curl -s http://127.0.0.1:8091/health | python3 -m json.tool
-# Expect: status=ok, llama_server.status=ok
+# Expect: status=ok, llama_server.status=ok, broker.log_dir reported
 ```
 
 ### CPU-only UAT (no Metal)
@@ -399,7 +421,8 @@ python -m broker.server \
   --model /path/to/ggml-model-i2_s.gguf \
   --ctx-size 2048 \
   --n-predict 512 \
-  --gpu-layers 0
+  --gpu-layers 0 \
+  --verbose 2
 ```
 
 The broker discovers `build/bin/llama-server` automatically when `build-metal/`

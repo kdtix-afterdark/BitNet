@@ -1,10 +1,12 @@
-"""In-memory session tracking for the local BitNet broker."""
+"""In-memory session tracking with optional disk persistence for the local BitNet broker."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from broker.durable_state import SessionLedger, record_session_opened
@@ -64,6 +66,39 @@ class SessionStore:
         self._ledgers[session.session_id] = ledger
         return session
 
+    def restore(
+        self,
+        session_id: str,
+        messages: List[Dict[str, str]],
+        system_prompt: str = "",
+    ) -> Session:
+        """Restore a session by ID with pre-existing message history.
+
+        Used to revive an in-memory session from persisted disk state after a
+        broker restart.  A minimal ``SessionLedger`` is created for the restored
+        session so subsequent operations work without errors.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        session = Session(
+            session_id=session_id,
+            created_at=now,
+            updated_at=now,
+            system_prompt=(system_prompt or "").strip(),
+            messages=list(messages),
+            turn_count=sum(1 for m in messages if m.get("role") == "assistant"),
+        )
+        self._sessions[session_id] = session
+        ledger = SessionLedger(session_id)
+        ledger.record(
+            record_session_opened(
+                session_id,
+                ledger.next_sequence,
+                system_prompt=session.system_prompt,
+            )
+        )
+        self._ledgers[session_id] = ledger
+        return session
+
     def get(self, session_id: str) -> Optional[Session]:
         return self._sessions.get(session_id)
 
@@ -91,3 +126,56 @@ class SessionStore:
             session.turn_count += 1
         session.updated_at = datetime.now(timezone.utc).isoformat()
 
+
+
+# ---------------------------------------------------------------------------
+# Disk persistence helpers (restart-safe session history)
+# ---------------------------------------------------------------------------
+
+def _session_file(state_dir: Path, session_id: str) -> Path:
+    """Return the path for the persisted session JSON file."""
+    return state_dir / "sessions" / ("%s.json" % session_id)
+
+
+def persist_messages(
+    state_dir: Path,
+    session_id: str,
+    messages: List[Dict[str, str]],
+    system_prompt: str = "",
+) -> None:
+    """Save *messages* (and optional *system_prompt*) for *session_id* to disk.
+
+    The file is written atomically-ish by writing to a ``.tmp`` file and then
+    renaming, so a crash mid-write doesn't corrupt the previous data.
+    """
+    dest = _session_file(state_dir, session_id)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "session_id": session_id,
+        "system_prompt": system_prompt,
+        "messages": messages,
+    }
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(dest)
+
+
+def load_persisted_session(
+    state_dir: Path,
+    session_id: str,
+) -> Optional[Tuple[List[Dict[str, str]], str]]:
+    """Load messages and system_prompt for *session_id* from disk.
+
+    Returns ``(messages, system_prompt)`` or ``None`` if no persisted state
+    exists for *session_id*.
+    """
+    dest = _session_file(state_dir, session_id)
+    if not dest.exists():
+        return None
+    try:
+        payload = json.loads(dest.read_text(encoding="utf-8"))
+        messages = payload.get("messages", [])
+        system_prompt = payload.get("system_prompt", "")
+        return messages, system_prompt
+    except (json.JSONDecodeError, OSError):
+        return None
