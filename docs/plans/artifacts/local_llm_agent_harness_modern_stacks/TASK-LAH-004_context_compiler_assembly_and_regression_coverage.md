@@ -447,9 +447,9 @@ does not exist.
 |---|---|---|
 | 1 | Review compiler path against harness plan | Inputs and outputs align: ledger, profile, tools, memory, and evidence all consumed |
 | 2 | Review expected regression scenarios | Replay and prompt-shaping risks covered by `TestModelFacingInclusionRules` |
-| 3 | Run `python3 -m pytest tests/test_prompting.py -v` | 82 tests pass |
-| 4 | Run `python3 -m pytest tests/ -v` | 133 tests pass (no regressions) |
-| 5 | Check `.github/workflows/test-prompting.yml` triggers | Workflow file present; triggers on push and PR for relevant paths |
+| 3 | Run `python3 -m pytest tests/test_prompting.py -v` | 89 tests pass |
+| 4 | Run `python3 -m pytest tests/test_turn_trace.py tests/test_run_profile.py tests/test_durable_state.py tests/test_prompting.py tests/test_memory_routing.py tests/test_logging_config.py -v` | 332 tests pass (no regressions) |
+| 5 | Check `.github/workflows/test-prompting.yml` triggers | Workflow file present; triggers on push and PR for relevant paths; 338 total including 6 skipped blas_contract tests in CI |
 
 ---
 
