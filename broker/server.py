@@ -344,6 +344,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=None, help="Default temperature")
     parser.add_argument("--top-p", type=float, default=None, help="Top-p nucleus sampling threshold")
     parser.add_argument("--gpu-layers", type=int, default=None, help="GPU layers to offload (0 = CPU-only, 999 = all)")
+    parser.add_argument("--batch-size", type=int, default=None, help="Logical batch size for llama-server (-b). Defaults to 31 for i2_s models (BLAS crash safeguard).")
+    parser.add_argument("--ubatch-size", type=int, default=None, help="Physical micro-batch size for llama-server (-ub). Defaults to 31 for i2_s models (BLAS crash safeguard).")
     return parser
 
 
@@ -373,6 +375,10 @@ def apply_cli_overrides(config: BrokerConfig, args: argparse.Namespace) -> Broke
         config.top_p = args.top_p
     if args.gpu_layers is not None:
         config.gpu_layers = args.gpu_layers
+    if args.batch_size is not None:
+        config.batch_size = args.batch_size
+    if args.ubatch_size is not None:
+        config.ubatch_size = args.ubatch_size
     return config
 
 

@@ -39,6 +39,8 @@ class BrokerConfig:
     temperature: float
     top_p: float
     gpu_layers: int
+    batch_size: int
+    ubatch_size: int
     startup_timeout: int
     request_timeout: int
     log_dir: Path
@@ -76,6 +78,22 @@ class BrokerConfig:
             os.environ.get("BITNET_BROKER_LOG_DIR", workspace_root / "broker_logs")
         ).resolve()
 
+        # i2_s safeguard: the BLAS backend only claims MUL_MAT ops when the
+        # physical batch dimension reaches its min_batch=32 threshold, and
+        # GGML_TYPE_I2_S requires external scale handling that the generic BLAS
+        # dequantize-to-float path does not support.  With BLAS enabled this
+        # causes a reproducible segfault at n_ubatch >= 32.  Default both batch
+        # dimensions to 31 for i2_s models so the managed runtime is safe
+        # out-of-the-box.  Users can raise these values once they either disable
+        # BLAS (`-DGGML_BLAS=OFF`) or apply an explicit I2_S guard in
+        # `3rdparty/llama.cpp/ggml/src/ggml-blas.cpp` to decline MUL_MAT for
+        # GGML_TYPE_I2_S (see PR #37 comment thread for details).
+        model_path_lower = str(model_path).lower()
+        is_i2s_model = "i2_s" in model_path_lower or "-i2s" in model_path_lower
+        _safe_batch = 31 if is_i2s_model else 512
+        batch_size = _env_int("BITNET_BROKER_BATCH_SIZE", _safe_batch)
+        ubatch_size = _env_int("BITNET_BROKER_UBATCH_SIZE", _safe_batch)
+
         return cls(
             workspace_root=workspace_root,
             model_path=model_path,
@@ -91,6 +109,8 @@ class BrokerConfig:
             temperature=_env_float("BITNET_BROKER_TEMPERATURE", 0.2),
             top_p=_env_float("BITNET_BROKER_TOP_P", 0.9),
             gpu_layers=_env_int("BITNET_BROKER_GPU_LAYERS", 0),
+            batch_size=batch_size,
+            ubatch_size=ubatch_size,
             startup_timeout=_env_int("BITNET_BROKER_STARTUP_TIMEOUT", 120),
             request_timeout=_env_int("BITNET_BROKER_REQUEST_TIMEOUT", 180),
             log_dir=log_dir,
