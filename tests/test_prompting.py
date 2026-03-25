@@ -857,3 +857,62 @@ class TestModelFacingInclusionRules:
         assert result[0]["role"] == "system"
         assert result[-1]["role"] == "user"
         assert "Hello" in result[-1]["content"]
+
+
+# ---------------------------------------------------------------------------
+# 9. build_messages conversation history (multi-turn retention)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMessagesConversationHistory:
+    """Regression tests for multi-turn conversation history in build_messages()."""
+
+    def test_conversation_history_injected_between_system_and_current_user(self):
+        history = [
+            {"role": "user", "content": "My name is Alice."},
+            {"role": "assistant", "content": "Nice to meet you, Alice!"},
+        ]
+        msgs = build_messages("sys", "What is my name?", [], conversation_history=history)
+        roles = [m["role"] for m in msgs]
+        assert roles == ["system", "user", "assistant", "user"]
+
+    def test_conversation_history_content_preserved(self):
+        history = [
+            {"role": "user", "content": "Remember X."},
+            {"role": "assistant", "content": "I will remember X."},
+        ]
+        msgs = build_messages("sys", "What do you remember?", [], conversation_history=history)
+        assert msgs[1]["content"] == "Remember X."
+        assert msgs[2]["content"] == "I will remember X."
+
+    def test_no_history_returns_two_messages(self):
+        msgs = build_messages("sys", "hello", [], conversation_history=None)
+        assert len(msgs) == 2
+
+    def test_empty_history_returns_two_messages(self):
+        msgs = build_messages("sys", "hello", [], conversation_history=[])
+        assert len(msgs) == 2
+
+    def test_invalid_roles_in_history_are_skipped(self):
+        history = [
+            {"role": "system", "content": "injected system message"},
+            {"role": "user", "content": "valid user turn"},
+            {"role": "assistant", "content": "valid assistant turn"},
+        ]
+        msgs = build_messages("sys", "hi", [], conversation_history=history)
+        roles = [m["role"] for m in msgs]
+        assert roles.count("system") == 1
+
+    def test_current_user_message_is_last(self):
+        history = [
+            {"role": "user", "content": "first turn"},
+            {"role": "assistant", "content": "first reply"},
+        ]
+        msgs = build_messages("sys", "second question", [], conversation_history=history)
+        assert msgs[-1]["role"] == "user"
+        assert "second question" in msgs[-1]["content"]
+
+    def test_grounded_user_prompt_false_omits_evidence_block(self):
+        msgs = build_messages("sys", "hello", [], grounded_user_prompt=False)
+        assert msgs[-1]["content"] == "hello"
+        assert "Evidence:" not in msgs[-1]["content"]

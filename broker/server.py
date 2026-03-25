@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 from .config import BrokerConfig
@@ -104,6 +104,7 @@ class BrokerApp:
         prompt = body.get("prompt", "").strip()
         if not prompt:
             raise ValueError("chat requests require a non-empty prompt")
+        session_id = self._normalize_session_id(body.get("session_id"))
         include_tool_manifest = bool(body.get("include_tool_manifest", True))
         broker_controls_tools = bool(body.get("broker_controls_tools", False))
         memory_query = body.get("memory_query")
@@ -172,12 +173,20 @@ class BrokerApp:
                     "raw": None,
                 }
 
+        conversation_history: List[Dict[str, str]] = []
+        if session_id:
+            session = self.sessions.get(session_id)
+            if session is not None:
+                conversation_history = list(session.messages)
+
         messages = build_messages(
             system_prompt=system_prompt,
             user_prompt=prompt,
             evidence_items=evidence,
+            conversation_history=conversation_history,
             tool_manifest=self.tools.tool_manifest() if include_tool_manifest else [],
             broker_controls_tools=broker_controls_tools,
+            grounded_user_prompt=bool(evidence),
         )
         response = self.runtime.chat(
             messages=messages,
@@ -190,6 +199,7 @@ class BrokerApp:
             text=content,
             evidence_items=evidence,
         )
+        self._append_session_turn(session_id, prompt, repaired_content)
         return {
             "response": repaired_content,
             "original_response": content,
@@ -258,6 +268,29 @@ class BrokerApp:
             "evidence": evidence,
             "raw": response,
         }
+
+    def _normalize_session_id(self, session_id: Any) -> Optional[str]:
+        """Return a clean session_id string or None if not provided."""
+        if not isinstance(session_id, str) or not session_id.strip():
+            return None
+        return session_id.strip()
+
+    def _append_session_turn(
+        self,
+        session_id: Optional[str],
+        user_prompt: str,
+        assistant_response: str,
+    ) -> None:
+        """Append user and assistant turns to the session message history."""
+        if not session_id:
+            return
+        if not assistant_response.strip():
+            return
+        try:
+            self.sessions.append_message(session_id, "user", user_prompt)
+            self.sessions.append_message(session_id, "assistant", assistant_response)
+        except ValueError:
+            pass
 
     def close(self) -> None:
         """Release broker-managed resources."""

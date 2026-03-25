@@ -273,7 +273,11 @@ class McpRegistry:
 
     def _load_server_configs(self, config_path: Path) -> Dict[str, McpServerConfig]:
         if not config_path.exists():
-            return {}
+            example = config_path.parent / (config_path.stem + ".example" + config_path.suffix)
+            if example.exists():
+                config_path = example
+            else:
+                return {}
 
         payload = json.loads(config_path.read_text(encoding="utf-8"))
         raw_servers = payload.get("servers", payload)
