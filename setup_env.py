@@ -10,6 +10,20 @@ from pathlib import Path
 
 logger = logging.getLogger("setup_env")
 
+
+def _find_homebrew_llvm18_compiler(tool):
+    """Return the Homebrew llvm@18 compiler binary path, or None if unavailable."""
+    try:
+        prefix = subprocess.check_output(
+            ["brew", "--prefix", "llvm@18"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        path = os.path.join(prefix, "bin", tool)
+        if os.path.exists(path):
+            return path
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return None
+
 SUPPORTED_HF_MODELS = {
     "1bitLLM/bitnet_b1_58-large": {
         "model_name": "bitnet_b1_58-large",
@@ -126,6 +140,7 @@ def prepare_model():
     gguf_path = os.path.join(model_dir, "ggml-model-" + quant_type + ".gguf")
     if not os.path.exists(gguf_path) or os.path.getsize(gguf_path) == 0:
         logging.info(f"Converting HF model to GGUF format...")
+        build_dir = args.build_dir or ("build-metal" if args.backend == "metal" else "build")
         if quant_type.startswith("tl"):
             run_command([sys.executable, "utils/convert-hf-to-gguf-bitnet.py", model_dir, "--outtype", quant_type, "--quant-embd"], log_step="convert_to_tl")
         else: # i2s
@@ -133,17 +148,19 @@ def prepare_model():
             run_command([sys.executable, "utils/convert-hf-to-gguf-bitnet.py", model_dir, "--outtype", "f32"], log_step="convert_to_f32_gguf")
             f32_model = os.path.join(model_dir, "ggml-model-f32.gguf")
             i2s_model = os.path.join(model_dir, "ggml-model-i2_s.gguf")
-            # quantize to i2s
+            # quantize to i2s — resolve llama-quantize from the active build dir
             if platform.system() != "Windows":
+                quantize_bin = os.path.join(build_dir, "bin", "llama-quantize")
                 if quant_embd:
-                    run_command(["./build/bin/llama-quantize", "--token-embedding-type", "f16", f32_model, i2s_model, "I2_S", "1", "1"], log_step="quantize_to_i2s")
+                    run_command([quantize_bin, "--token-embedding-type", "f16", f32_model, i2s_model, "I2_S", "1", "1"], log_step="quantize_to_i2s")
                 else:
-                    run_command(["./build/bin/llama-quantize", f32_model, i2s_model, "I2_S", "1"], log_step="quantize_to_i2s")
+                    run_command([quantize_bin, f32_model, i2s_model, "I2_S", "1"], log_step="quantize_to_i2s")
             else:
+                quantize_bin = os.path.join(build_dir, "bin", "Release", "llama-quantize.exe")
                 if quant_embd:
-                    run_command(["./build/bin/Release/llama-quantize", "--token-embedding-type", "f16", f32_model, i2s_model, "I2_S", "1", "1"], log_step="quantize_to_i2s")
+                    run_command([quantize_bin, "--token-embedding-type", "f16", f32_model, i2s_model, "I2_S", "1", "1"], log_step="quantize_to_i2s")
                 else:
-                    run_command(["./build/bin/Release/llama-quantize", f32_model, i2s_model, "I2_S", "1"], log_step="quantize_to_i2s")
+                    run_command([quantize_bin, f32_model, i2s_model, "I2_S", "1"], log_step="quantize_to_i2s")
 
         logging.info(f"GGUF model saved at {gguf_path}")
     else:
@@ -210,10 +227,48 @@ def compile():
     if arch not in COMPILER_EXTRA_ARGS.keys():
         logging.error(f"Arch {arch} is not supported yet")
         exit(0)
+
+    backend = args.backend
+    build_dir = args.build_dir or ("build-metal" if backend == "metal" else "build")
+
+    # Resolve C/C++ compilers: explicit CLI flag > Homebrew clang 18 (Metal/macOS) > system clang
+    if backend == "metal" and platform.system() == "Darwin":
+        c_compiler = args.c_compiler or _find_homebrew_llvm18_compiler("clang") or "clang"
+        cxx_compiler = args.cxx_compiler or _find_homebrew_llvm18_compiler("clang++") or "clang++"
+    else:
+        c_compiler = args.c_compiler or "clang"
+        cxx_compiler = args.cxx_compiler or "clang++"
+
+    cmake_args = [
+        "cmake", "-B", build_dir,
+        f"-DCMAKE_C_COMPILER={c_compiler}",
+        f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
+        *COMPILER_EXTRA_ARGS[arch],
+        *OS_EXTRA_ARGS.get(platform.system(), []),
+    ]
+
+    if backend == "metal" and platform.system() == "Darwin":
+        # Resolve Homebrew libomp for OpenMP support
+        try:
+            openmp_root = subprocess.check_output(
+                ["brew", "--prefix", "libomp"], stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            openmp_root = None
+
+        cmake_args += [
+            "-DGGML_METAL=ON",
+            "-DGGML_ACCELERATE=ON",
+            "-DGGML_BLAS=ON",
+            "-DGGML_BLAS_VENDOR=Apple",
+            "-DBITNET_ARM_TL1=OFF",  # also in COMPILER_EXTRA_ARGS["arm64"]; explicit here for clarity
+        ]
+        if openmp_root:
+            cmake_args.append(f"-DOpenMP_ROOT={openmp_root}")
+
     logging.info("Compiling the code using CMake.")
-    run_command(["cmake", "-B", "build", *COMPILER_EXTRA_ARGS[arch], *OS_EXTRA_ARGS.get(platform.system(), []), "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"], log_step="generate_build_files")
-    # run_command(["cmake", "--build", "build", "--target", "llama-cli", "--config", "Release"])
-    run_command(["cmake", "--build", "build", "--config", "Release"], log_step="compile")
+    run_command(cmake_args, log_step="generate_build_files")
+    run_command(["cmake", "--build", build_dir, "--config", "Release"], log_step="compile")
 
 def main():
     setup_gguf()
@@ -230,6 +285,10 @@ def parse_args():
     parser.add_argument("--quant-type", "-q", type=str, help="Quantization type", choices=SUPPORTED_QUANT_TYPES[arch], default="i2_s")
     parser.add_argument("--quant-embd", action="store_true", help="Quantize the embeddings to f16")
     parser.add_argument("--use-pretuned", "-p", action="store_true", help="Use the pretuned kernel parameters")
+    parser.add_argument("--build-dir", type=str, help="Build output directory (default: build-metal for --backend metal, build otherwise)", default=None)
+    parser.add_argument("--backend", type=str, choices=["cpu", "metal"], help="Build backend: cpu (default) or metal (Apple Metal/GPU)", default="cpu")
+    parser.add_argument("--c-compiler", type=str, help="C compiler to use (default: Homebrew clang 18 for Metal on macOS, else clang)", default=None)
+    parser.add_argument("--cxx-compiler", type=str, help="C++ compiler to use (default: Homebrew clang++ 18 for Metal on macOS, else clang++)", default=None)
     return parser.parse_args()
 
 def signal_handler(sig, frame):

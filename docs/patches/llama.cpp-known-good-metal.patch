@@ -1,0 +1,89 @@
+diff --git a/ggml/src/CMakeLists.txt b/ggml/src/CMakeLists.txt
+index 9006bdb7..9b7bb5a9 100644
+--- a/ggml/src/CMakeLists.txt
++++ b/ggml/src/CMakeLists.txt
+@@ -185,6 +185,16 @@ if (GGML_BLAS)
+     if (BLAS_FOUND)
+         message(STATUS "BLAS found, Libraries: ${BLAS_LIBRARIES}")
+ 
++        if (APPLE AND (${GGML_BLAS_VENDOR} MATCHES "Apple") AND ("${BLAS_INCLUDE_DIRS}" STREQUAL ""))
++            find_path(BLAS_INCLUDE_DIRS
++                NAMES cblas.h
++                PATHS
++                    /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/Headers
++                    /Library/Developer/CommandLineTools/SDKs/MacOSX26.2.sdk/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/Headers
++                    /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/Headers
++            )
++        endif()
++
+         if (("${BLAS_INCLUDE_DIRS}" STREQUAL "") AND NOT (${GGML_BLAS_VENDOR} MATCHES "Apple"))
+             # BLAS_INCLUDE_DIRS is missing in FindBLAS.cmake.
+             # see https://gitlab.kitware.com/cmake/cmake/-/issues/20268
+diff --git a/ggml/src/ggml-blas.cpp b/ggml/src/ggml-blas.cpp
+index 7875ec86..baa1d3ce 100644
+--- a/ggml/src/ggml-blas.cpp
++++ b/ggml/src/ggml-blas.cpp
+@@ -7,7 +7,7 @@
+ #include <cstring>
+ 
+ #if defined(GGML_USE_ACCELERATE)
+-#   include <Accelerate/Accelerate.h>
++#   include <vecLib/cblas.h>
+ #elif defined(GGML_BLAS_USE_MKL)
+ #   include <mkl.h>
+ #elif defined(GGML_BLAS_USE_BLIS)
+diff --git a/ggml/src/ggml-metal.m b/ggml/src/ggml-metal.m
+index d8a68236..0562ba9b 100644
+--- a/ggml/src/ggml-metal.m
++++ b/ggml/src/ggml-metal.m
+@@ -55,12 +55,23 @@ static id<MTLDevice> ggml_backend_metal_device_acq(struct ggml_backend_metal_dev
+     if (ctx->mtl_device == nil) {
+         ctx->mtl_device = MTLCreateSystemDefaultDevice();
+ 
++        if (ctx->mtl_device == nil) {
++            snprintf(ctx->name, sizeof(ctx->name), "%s", "Metal unavailable");
++            return nil;
++        }
++
+         ctx->support_simdgroup_reduction  = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
+         ctx->support_simdgroup_reduction |= [ctx->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
+ 
+         ctx->support_simdgroup_mm = [ctx->mtl_device supportsFamily:MTLGPUFamilyApple7];
+ 
+-        strncpy(ctx->name, [[ctx->mtl_device name] UTF8String], sizeof(ctx->name) - 1);
++        const char * device_name = [[ctx->mtl_device name] UTF8String];
++        if (device_name != NULL) {
++            strncpy(ctx->name, device_name, sizeof(ctx->name) - 1);
++        } else {
++            snprintf(ctx->name, sizeof(ctx->name), "%s", "Unknown Metal device");
++        }
++        ctx->name[sizeof(ctx->name) - 1] = '\0';
+     }
+ 
+     ctx->mtl_device_ref_count++;
+@@ -3607,6 +3618,12 @@ static void ggml_backend_metal_device_get_memory(ggml_backend_dev_t dev, size_t
+         struct ggml_backend_metal_device_context * ctx_dev = (struct ggml_backend_metal_device_context *)dev->context;
+         id<MTLDevice> device = ggml_backend_metal_device_acq(ctx_dev);
+ 
++        if (device == nil) {
++            *free = 0;
++            *total = 0;
++            return;
++        }
++
+         *total = device.recommendedMaxWorkingSetSize;
+         *free  = *total - device.currentAllocatedSize;
+ 
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index 121f72da..fd5b9ce9 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -467,7 +467,7 @@ inline static void * ggml_calloc(size_t num, size_t size) {
+ #define SWAP(x, y, T) do { T SWAP = x; (x) = y; (y) = SWAP; } while (0)
+ 
+ #if defined(GGML_USE_ACCELERATE)
+-#include <Accelerate/Accelerate.h>
++#include <vecLib/vDSP.h>
+ #endif
+ 
+ // floating point type used to accumulate sums

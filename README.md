@@ -337,3 +337,69 @@ Import-Module "C:\Program Files\Microsoft Visual Studio\2022\Professional\Common
 ```
 
 These steps will initialize your environment and allow you to use the correct Visual Studio tools.
+
+## Local LLM Agent Harness (Broker)
+
+The `broker/` directory contains a lightweight HTTP broker that wraps a running
+`llama-server` process and adds session management, memory routing, MCP tool
+integration, and a structured context compiler.
+
+### Quick start (Apple Silicon / Metal)
+
+**Step 1 — build with Metal support**
+
+```bash
+python3 setup_env.py \
+  --backend metal \
+  --build-dir build-metal \
+  --model-dir models \
+  --hf-repo microsoft/BitNet-b1.58-2B-4T
+```
+
+**Step 2 — start `llama-server`** (terminal 1)
+
+```bash
+./build-metal/bin/llama-server \
+  -m models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf \
+  -c 4096 -t 10 -n 4096 --keep -1 \
+  -ngl 999 -b 2048 -ub 512 \
+  --temp 0.5 --top-p 0.9 \
+  --host 127.0.0.1 --port 8080 --slots -cb
+```
+
+**Step 3 — start the broker** (terminal 2)
+
+```bash
+python3 -m broker.server \
+  --model models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf \
+  --gpu-layers 999 --batch-size 2048 --ubatch-size 512 \
+  --verbose 2 --debug 1
+```
+
+The broker auto-attaches to the running `llama-server` on port 8080.
+
+### Verbose / debug logging
+
+| Flag / env var | Values | Effect |
+|---|---|---|
+| `--verbose` / `BITNET_BROKER_VERBOSE` | `0` error-only · `1` info · `2` debug · `3` trace | Output verbosity: how much the broker prints |
+| `--debug` / `BITNET_BROKER_DEBUG` | `0` off · `1` request/response · `2` prompt assembly · `3` full token trace | Subsystem debug depth (additive to `--verbose`) |
+
+### Log file locations
+
+Broker logs are written automatically to `logs/broker/` in the workspace root:
+
+```
+logs/broker/broker-YYYYMMDD-HHMMSS.log   # timestamped session archive (e.g. broker-20260325-143022.log)
+logs/broker/broker-latest.log            # symlink to the most recent run
+```
+
+The startup banner and the `/health` endpoint both report the active log
+directory.  When submitting bug reports, attach `logs/broker/broker-latest.log`.
+
+### Full UAT guide
+
+See
+[`docs/plans/artifacts/local_llm_agent_harness_modern_stacks/TASK-LAH-004_context_compiler_assembly_and_regression_coverage.md`](docs/plans/artifacts/local_llm_agent_harness_modern_stacks/TASK-LAH-004_context_compiler_assembly_and_regression_coverage.md)
+for the complete Metal UAT bootstrap steps (build flags, llama-server flags,
+multi-turn restart continuity, and memory MCP integration scenarios).

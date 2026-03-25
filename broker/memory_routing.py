@@ -11,7 +11,7 @@ from .mcp import McpRegistry
 
 
 _REMEMBER_RE = re.compile(
-    r"^\s*remember\s+(?P<entity>[^:]+?)\s*:\s*(?P<observation>.+?)\s*$",
+    r"^\s*remember\s+(?:that\s+)?(?P<entity>[^:]+?)\s*(?::\s*(?P<observation>.+?))?\s*$",
     flags=re.IGNORECASE,
 )
 _RECALL_RE = re.compile(
@@ -158,8 +158,17 @@ def _handle_remember(
     match: re.Match[str],
     mcp_registry: McpRegistry,
 ) -> MemoryRouteResult:
-    entity = _normalize_value(match.group("entity"))
-    observation = _normalize_value(match.group("observation"))
+    raw_entity = _normalize_value(match.group("entity"))
+    raw_observation = match.group("observation")
+    # Natural-language form ("remember that <content>"): observation is absent.
+    # Bucket all such observations under the "memo" entity (a well-known name
+    # that is easy to query with `search_nodes query="memo"`).
+    if raw_observation is None or not raw_observation.strip():
+        entity = "memo"
+        observation = raw_entity
+    else:
+        entity = raw_entity
+        observation = _normalize_value(raw_observation)
     operations: List[Dict[str, Any]] = []
 
     try:
@@ -390,3 +399,38 @@ def _memory_error_result(reason: str, exc: Exception) -> MemoryRouteResult:
 
 def _normalize_value(raw_value: str) -> str:
     return raw_value.strip().rstrip("?").strip()
+
+
+# ---------------------------------------------------------------------------
+# Profile-aware memory evidence collection
+# ---------------------------------------------------------------------------
+
+#: Profiles that should automatically trigger memory evidence collection even
+#: when the prompt doesn't match a memory-specific pattern.
+_MEMORY_FIRST_PROFILES = {"memory_first"}
+
+
+def collect_memory_evidence_for_profile(
+    prompt: str,
+    profile: Optional[str],
+    mcp_registry: "McpRegistry",
+    explicit_query: Optional[str] = None,
+) -> Optional["MemoryRouteResult"]:
+    """Collect memory evidence when the run profile demands it.
+
+    When *profile* is ``"memory_first"`` and the prompt does not already
+    trigger ``maybe_collect_memory_evidence`` on its own (because it doesn't
+    match a memory-evidence regex), this function still queries memory using
+    the *prompt* (or *explicit_query* if provided) so that relevant past
+    knowledge surfaces in the model context.
+
+    Returns ``None`` when the profile is not memory-first or no query can be
+    derived.  Otherwise returns a ``MemoryRouteResult`` (``handled=False``)
+    that callers should merge into their evidence collection.
+    """
+    if not profile or profile.strip().lower() not in _MEMORY_FIRST_PROFILES:
+        return None
+    query = _normalize_value(explicit_query) if explicit_query else _normalize_value(prompt)
+    if not query:
+        return None
+    return maybe_collect_memory_evidence(prompt, mcp_registry, explicit_query=query)
