@@ -10,10 +10,12 @@
 # - broker/durable_state.py  — ledger round-trip and visibility rules
 # - broker/session_store.py  — session seeding
 # - broker/prompting.py      — all prompt-assembly helpers and context compiler
-# - tests/test_turn_trace.py    — 60 regression tests (TASK-LAH-001)
-# - tests/test_run_profile.py   — 78 regression tests (TASK-LAH-002)
-# - tests/test_durable_state.py — 51 regression tests (TASK-LAH-003)
-# - tests/test_prompting.py     — 82 regression tests (TASK-LAH-004)
+# - tests/test_turn_trace.py              — 60 regression tests (TASK-LAH-001)
+# - tests/test_run_profile.py             — 78 regression tests (TASK-LAH-002)
+# - tests/test_durable_state.py           — 51 regression tests (TASK-LAH-003)
+# - tests/test_prompting.py               — 82 regression tests (TASK-LAH-004)
+# - tests/test_llama_cpp_blas_contract.py — 6 source-level guards (skipped in CI
+#                                           when submodule is not checked out)
 #
 # What requires local Apple Silicon + Metal UAT
 # ----------------------------------------------
@@ -43,6 +45,7 @@ on:
       - "tests/test_run_profile.py"
       - "tests/test_durable_state.py"
       - "tests/test_prompting.py"
+      - "tests/test_llama_cpp_blas_contract.py"
       - ".github/workflows/test-prompting.yml"
   pull_request:
     paths:
@@ -55,6 +58,7 @@ on:
       - "tests/test_run_profile.py"
       - "tests/test_durable_state.py"
       - "tests/test_prompting.py"
+      - "tests/test_llama_cpp_blas_contract.py"
       - ".github/workflows/test-prompting.yml"
 
 jobs:
@@ -79,4 +83,4 @@ jobs:
           pip install pytest
 
       - name: Run all broker contract and context compiler tests
-        run: python -m pytest tests/test_turn_trace.py tests/test_run_profile.py tests/test_durable_state.py tests/test_prompting.py -v
+        run: python -m pytest tests/test_turn_trace.py tests/test_run_profile.py tests/test_durable_state.py tests/test_prompting.py tests/test_llama_cpp_blas_contract.py -v
