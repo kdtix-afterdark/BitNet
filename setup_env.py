@@ -1,11 +1,12 @@
-import subprocess
-import signal
-import sys
-import os
-import platform
 import argparse
 import logging
+import os
+import platform
+import re
 import shutil
+import signal
+import subprocess
+import sys
 from pathlib import Path
 
 logger = logging.getLogger("setup_env")
@@ -104,7 +105,93 @@ def run_command(command, shell=False, log_step=None):
             subprocess.run(command, shell=shell, check=True)
         except subprocess.CalledProcessError as e:
             logging.error(f"Error occurred while running command: {e}")
-        sys.exit(1)
+            sys.exit(1)
+
+
+def get_build_dir():
+    return Path(args.build_dir)
+
+
+def get_binary_path(binary_name):
+    build_dir = get_build_dir()
+    if platform.system() == "Windows":
+        release_path = build_dir / "bin" / "Release" / f"{binary_name}.exe"
+        if release_path.exists():
+            return str(release_path)
+        fallback_path = build_dir / "bin" / binary_name
+        return str(fallback_path)
+    return str(build_dir / "bin" / binary_name)
+
+
+def parse_clang_major(version_output):
+    match = re.search(r"(?:Apple )?clang version\s+(\d+)", version_output, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"clang[- ](\d+)", version_output, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def compiler_version(executable):
+    try:
+        result = subprocess.run(
+            [executable, "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None, ""
+    first_line = result.stdout.splitlines()[0] if result.stdout else ""
+    return parse_clang_major(first_line), first_line
+
+
+def resolve_clang_pair(min_major=18):
+    candidates = []
+    if args.c_compiler and args.cxx_compiler:
+        candidates.append((args.c_compiler, args.cxx_compiler))
+
+    env_c = os.environ.get("BITNET_C_COMPILER")
+    env_cxx = os.environ.get("BITNET_CXX_COMPILER")
+    if env_c and env_cxx:
+        candidates.append((env_c, env_cxx))
+
+    candidates.extend(
+        [
+            ("/opt/homebrew/opt/llvm@18/bin/clang", "/opt/homebrew/opt/llvm@18/bin/clang++"),
+            ("/opt/homebrew/opt/llvm/bin/clang", "/opt/homebrew/opt/llvm/bin/clang++"),
+        ]
+    )
+
+    which_clang = shutil.which("clang")
+    which_clangxx = shutil.which("clang++")
+    if which_clang and which_clangxx:
+        candidates.append((which_clang, which_clangxx))
+
+    seen = set()
+    for clang, clangxx in candidates:
+        if (clang, clangxx) in seen:
+            continue
+        seen.add((clang, clangxx))
+        major, version_line = compiler_version(clang)
+        if major is not None and major >= min_major and os.path.exists(clangxx):
+            return clang, clangxx, version_line
+
+    logging.error("clang>=%d not found. Install llvm@18 or set BITNET_C_COMPILER and BITNET_CXX_COMPILER.", min_major)
+    sys.exit(1)
+
+
+def resolve_explicit_compiler_pair():
+    if args.c_compiler and args.cxx_compiler:
+        return args.c_compiler, args.cxx_compiler
+
+    env_c = os.environ.get("BITNET_C_COMPILER")
+    env_cxx = os.environ.get("BITNET_CXX_COMPILER")
+    if env_c and env_cxx:
+        return env_c, env_cxx
+
+    return None, None
 
 def prepare_model():
     _, arch = system_info()
@@ -136,14 +223,9 @@ def prepare_model():
             # quantize to i2s
             if platform.system() != "Windows":
                 if quant_embd:
-                    run_command(["./build/bin/llama-quantize", "--token-embedding-type", "f16", f32_model, i2s_model, "I2_S", "1", "1"], log_step="quantize_to_i2s")
+                    run_command([get_binary_path("llama-quantize"), "--token-embedding-type", "f16", f32_model, i2s_model, "I2_S", "1", "1"], log_step="quantize_to_i2s")
                 else:
-                    run_command(["./build/bin/llama-quantize", f32_model, i2s_model, "I2_S", "1"], log_step="quantize_to_i2s")
-            else:
-                if quant_embd:
-                    run_command(["./build/bin/Release/llama-quantize", "--token-embedding-type", "f16", f32_model, i2s_model, "I2_S", "1", "1"], log_step="quantize_to_i2s")
-                else:
-                    run_command(["./build/bin/Release/llama-quantize", f32_model, i2s_model, "I2_S", "1"], log_step="quantize_to_i2s")
+                    run_command([get_binary_path("llama-quantize"), f32_model, i2s_model, "I2_S", "1"], log_step="quantize_to_i2s")
 
         logging.info(f"GGUF model saved at {gguf_path}")
     else:
@@ -211,9 +293,48 @@ def compile():
         logging.error(f"Arch {arch} is not supported yet")
         exit(0)
     logging.info("Compiling the code using CMake.")
-    run_command(["cmake", "-B", "build", *COMPILER_EXTRA_ARGS[arch], *OS_EXTRA_ARGS.get(platform.system(), []), "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"], log_step="generate_build_files")
-    # run_command(["cmake", "--build", "build", "--target", "llama-cli", "--config", "Release"])
-    run_command(["cmake", "--build", "build", "--config", "Release"], log_step="compile")
+    c_compiler = "clang"
+    cxx_compiler = "clang++"
+    if platform.system() == "Darwin":
+        explicit_c, explicit_cxx = resolve_explicit_compiler_pair()
+        if explicit_c and explicit_cxx:
+            c_compiler = explicit_c
+            cxx_compiler = explicit_cxx
+            _, version_line = compiler_version(c_compiler)
+            logging.info("Using compiler override: %s", version_line or c_compiler)
+        elif args.backend == "metal":
+            c_compiler, cxx_compiler, version_line = resolve_clang_pair()
+            logging.info("Using Metal compiler: %s", version_line)
+        else:
+            c_compiler = "/usr/bin/clang"
+            cxx_compiler = "/usr/bin/clang++"
+            logging.info("Using CPU compiler: Apple clang from /usr/bin")
+    build_dir = get_build_dir()
+    cmake_args = [
+        "cmake",
+        "-B",
+        str(build_dir),
+        *COMPILER_EXTRA_ARGS[arch],
+        *OS_EXTRA_ARGS.get(platform.system(), []),
+        f"-DCMAKE_C_COMPILER={c_compiler}",
+        f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
+    ]
+    if args.backend == "metal":
+        if platform.system() != "Darwin":
+            logging.error("The metal backend is only supported on macOS.")
+            sys.exit(1)
+        cmake_args.append("-DGGML_METAL=ON")
+        cmake_args.extend([
+            "-DGGML_ACCELERATE=ON",
+            "-DGGML_BLAS=ON",
+            "-DGGML_BLAS_VENDOR=Apple",
+        ])
+    else:
+        cmake_args.append("-DGGML_METAL=OFF")
+    if platform.system() == "Darwin" and os.path.exists("/opt/homebrew/opt/libomp"):
+        cmake_args.append("-DOpenMP_ROOT=/opt/homebrew/opt/libomp")
+    run_command(cmake_args, log_step="generate_build_files")
+    run_command(["cmake", "--build", str(build_dir), "--config", "Release"], log_step="compile")
 
 def main():
     setup_gguf()
@@ -230,6 +351,10 @@ def parse_args():
     parser.add_argument("--quant-type", "-q", type=str, help="Quantization type", choices=SUPPORTED_QUANT_TYPES[arch], default="i2_s")
     parser.add_argument("--quant-embd", action="store_true", help="Quantize the embeddings to f16")
     parser.add_argument("--use-pretuned", "-p", action="store_true", help="Use the pretuned kernel parameters")
+    parser.add_argument("--build-dir", type=str, help="Build directory for generated binaries", default="build")
+    parser.add_argument("--backend", type=str, choices=["cpu", "metal"], default="cpu", help="Backend to compile into the selected build directory")
+    parser.add_argument("--c-compiler", type=str, help="Override C compiler passed to CMake")
+    parser.add_argument("--cxx-compiler", type=str, help="Override C++ compiler passed to CMake")
     return parser.parse_args()
 
 def signal_handler(sig, frame):

@@ -9,6 +9,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 _MARKDOWN_FENCE_RE = re.compile(r"^```(?:markdown|md)?\s*\n(?P<body>[\s\S]*?)\n```$")
 _HEADING_RE = re.compile(r"^(?P<level>#+)\s+(?P<title>.+?)\s*$", flags=re.MULTILINE)
+_ROLE_LABEL_SPILLOVER_RE = re.compile(r"\n\s*(?:User|Assistant|System):\s", flags=re.IGNORECASE)
+_PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n+")
 
 
 def strip_markdown_fence(text: str) -> str:
@@ -231,14 +233,162 @@ def _format_list_response(values: List[str], prompt: str) -> str:
     return ", ".join(values)
 
 
+def _prompt_requests_transcript(prompt: str) -> bool:
+    lowered = prompt.lower()
+    triggers = (
+        "transcript",
+        "chat log",
+        "dialogue",
+        "dialog",
+        "speaker label",
+        "role label",
+        "conversation between",
+        "write a conversation",
+        "write a transcript",
+        "script format",
+        "screenplay",
+        "user:",
+        "assistant:",
+    )
+    return any(trigger in lowered for trigger in triggers)
+
+
+def _normalize_space(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _split_paragraphs(text: str) -> List[str]:
+    return [paragraph.strip() for paragraph in _PARAGRAPH_SPLIT_RE.split(text.strip()) if paragraph.strip()]
+
+
+def trim_repeated_assistant_prefix(
+    prompt: str,
+    text: str,
+    conversation_history: Optional[Iterable[Dict[str, str]]] = None,
+) -> Optional[str]:
+    """Trim a stale leading assistant block copied from recent assistant history."""
+    if _prompt_requests_transcript(prompt):
+        return None
+
+    normalized_text = text.strip()
+    if not normalized_text:
+        return None
+
+    recent_assistant_responses = [
+        str(message.get("content", "")).strip()
+        for message in conversation_history or []
+        if str(message.get("role", "")).strip() == "assistant"
+        and str(message.get("content", "")).strip()
+    ]
+    if not recent_assistant_responses:
+        return None
+
+    for prior_raw in sorted(recent_assistant_responses[-4:], key=len, reverse=True):
+        prior = _normalize_space(prior_raw)
+        if len(prior_raw) < 24:
+            continue
+        if normalized_text == prior_raw:
+            continue
+        if normalized_text.startswith(prior_raw + "\n\n"):
+            trimmed = normalized_text[len(prior_raw) :].lstrip()
+            if len(trimmed) >= 24:
+                return trimmed
+        if _normalize_space(normalized_text).startswith(prior + " "):
+            paragraphs = _split_paragraphs(normalized_text)
+            trimmed = "\n\n".join(paragraphs[1:]).strip()
+            if len(trimmed) >= 24:
+                return trimmed
+
+    paragraphs = _split_paragraphs(normalized_text)
+    if len(paragraphs) < 2:
+        return None
+
+    first_paragraph = _normalize_space(paragraphs[0])
+    if any(first_paragraph == _normalize_space(prior) for prior in recent_assistant_responses[-4:]):
+        trimmed = "\n\n".join(paragraphs[1:]).strip()
+        if len(trimmed) >= 24:
+            return trimmed
+    return None
+
+
+def trim_role_label_spillover(prompt: str, text: str) -> Optional[str]:
+    """Trim accidental raw transcript spillover from a normal assistant reply."""
+    if _prompt_requests_transcript(prompt):
+        return None
+
+    match = _ROLE_LABEL_SPILLOVER_RE.search(text)
+    if match is None:
+        return None
+
+    trimmed = text[: match.start()].rstrip()
+    if len(trimmed) < 24:
+        return None
+    return trimmed
+
+
+def collapse_duplicate_paragraphs(prompt: str, text: str) -> Optional[str]:
+    """Collapse obvious duplicate paragraph loops in normal assistant replies."""
+    if _prompt_requests_transcript(prompt):
+        return None
+
+    paragraphs = _split_paragraphs(text)
+    if len(paragraphs) < 3:
+        return None
+
+    kept: List[str] = []
+    seen_long: set[str] = set()
+    removed = False
+    for paragraph in paragraphs:
+        normalized = _normalize_space(paragraph)
+        is_long = len(normalized) >= 120
+        if is_long and normalized in seen_long:
+            removed = True
+            continue
+        kept.append(paragraph)
+        if is_long:
+            seen_long.add(normalized)
+
+    if not removed:
+        return None
+
+    collapsed = "\n\n".join(kept).strip()
+    if len(collapsed) < 24:
+        return None
+    return collapsed
+
+
 def repair_chat_response(
     prompt: str,
     text: str,
     evidence_items: Iterable[Dict[str, str]],
+    conversation_history: Optional[Iterable[Dict[str, str]]] = None,
 ) -> Tuple[str, bool, Optional[str]]:
     """Apply deterministic repairs for simple extractive grounded chat tasks."""
     normalized = strip_markdown_fence(text).strip()
     lowered_prompt = prompt.lower()
+    working = normalized
+    repairs: List[str] = []
+
+    trimmed_spillover = trim_role_label_spillover(prompt, working)
+    if trimmed_spillover is not None:
+        return trimmed_spillover, True, "trimmed_role_label_spillover"
+
+    trimmed_prefix = trim_repeated_assistant_prefix(
+        prompt,
+        working,
+        conversation_history=conversation_history,
+    )
+    if trimmed_prefix is not None:
+        working = trimmed_prefix
+        repairs.append("trimmed_repeated_assistant_prefix")
+
+    collapsed_duplicates = collapse_duplicate_paragraphs(prompt, working)
+    if collapsed_duplicates is not None:
+        working = collapsed_duplicates
+        repairs.append("collapsed_duplicate_paragraphs")
+
+    if repairs:
+        return working, True, "+".join(repairs)
 
     if (
         "title only" in lowered_prompt
@@ -299,4 +449,4 @@ def repair_chat_response(
         if truncated is not None:
             return "Yes" if truncated else "No", True, "extracted_truncation_flag_from_evidence"
 
-    return normalized, False, None
+    return working, False, None

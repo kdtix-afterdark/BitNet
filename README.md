@@ -216,7 +216,58 @@ optional arguments:
                         Quantization type
   --quant-embd          Quantize the embeddings to f16
   --use-pretuned, -p    Use the pretuned kernel parameters
+  --build-dir BUILD_DIR
+                        Build directory for generated binaries
+  --backend {cpu,metal}
+                        Backend to compile into the selected build directory
 </pre>
+
+### Apple Silicon: keep CPU and Metal builds side by side
+
+On Apple Silicon, you can keep the default CPU build in `build/` and create a
+separate Metal-enabled build in `build-metal/`.
+
+CPU build:
+
+```bash
+python setup_env.py -md models/BitNet-b1.58-2B-4T -q i2_s --build-dir build --backend cpu
+```
+
+Metal build:
+
+```bash
+python setup_env.py -md models/BitNet-b1.58-2B-4T -q i2_s --build-dir build-metal --backend metal
+```
+
+On this Apple Silicon machine, the Metal build path resolves Homebrew
+`clang 18.x` explicitly and enables `GGML_ACCELERATE=ON` plus
+`GGML_BLAS=ON` with `GGML_BLAS_VENDOR=Apple`. The CPU build continues to use
+Apple clang from `/usr/bin`.
+
+### Local broker environment profile
+
+The local broker is now intended to run from environment defaults first, with
+CLI flags used only as one-off overrides.
+
+The recommended checked-in profile is [`.env.example`](/Users/ckreager/repos/kdtix/LLMs/BitNet/.env.example). Load it with:
+
+```bash
+cd /Users/ckreager/repos/kdtix/LLMs/BitNet
+
+set -a
+source ./.env.example
+set +a
+```
+
+Then start the broker with:
+
+```bash
+python3 run_broker.py
+```
+
+For the full broker contract, durable lifecycle, recovery flow, and complete
+environment variable reference, see [broker/README.md](/Users/ckreager/repos/kdtix/LLMs/BitNet/broker/README.md).
+
 ## Usage
 ### Basic usage
 ```bash
@@ -244,7 +295,74 @@ optional arguments:
                         Temperature, a hyperparameter that controls the randomness of the generated text
   -cnv, --conversation  Whether to enable chat mode or not (for instruct models.)
                         (When this option is turned on, the prompt specified by -p will be used as the system prompt.)
+  --chat-model {current,quality}
+                        When running in conversation mode, keep the selected model or switch to a sibling F32 GGUF for higher quality if available.
+  --build-dir BUILD_DIR
+                        Build directory containing llama-cli
+  --gpu-layers GPU_LAYERS
+                        Number of layers to offload to the GPU backend
 </pre>
+
+CPU inference:
+
+```bash
+python run_inference.py \
+  --build-dir build \
+  --gpu-layers 0 \
+  -m models/bitnet-b1.58-2B-4T-bf16/ggml-model-i2s-bitnet.gguf \
+  -p "You are a helpful assistant" \
+  -cnv
+```
+
+Metal inference:
+
+```bash
+python run_inference.py \
+  --build-dir build-metal \
+  --gpu-layers 999 \
+  -m models/bitnet-b1.58-2B-4T-bf16/ggml-model-i2s-bitnet.gguf \
+  -p "You are a helpful assistant" \
+  -cnv
+```
+
+Known-good interactive chat on Apple Silicon:
+
+```bash
+python run_inference.py \
+  --build-dir build-metal \
+  --gpu-layers 999 \
+  -m models/bitnet-b1.58-2B-4T-bf16/ggml-model-i2s-bitnet.gguf \
+  --chat-model quality \
+  -p "You are a helpful assistant" \
+  -cnv \
+  -temp 0.2 \
+  -n 64
+```
+
+> [!NOTE]
+> On March 18, 2026, `build-metal/` was validated on an Apple M4 Max host with
+> Homebrew `clang 18.1.8`, `GGML_METAL=ON`, `GGML_ACCELERATE=ON`, and
+> `GGML_BLAS=ON` / `GGML_BLAS_VENDOR=Apple`.
+>
+> Host-side validation confirmed:
+> - `ggml_metal_init: found device: Apple M4 Max`
+> - `llm_load_tensors: offloaded 31/31 layers to GPU`
+> - `BLAS = 1`
+> - successful generation without a crash
+> - `ggml-model-f32-bitnet.gguf` produced coherent interactive chat at
+>   `-temp 0.2`
+> - `ggml-model-i2s-bitnet.gguf` still produced degenerate interactive chat on
+>   the same Metal runtime
+>
+> The Codex desktop runtime still reports `MTLCreateSystemDefaultDevice() = nil`,
+> but that is a limitation of the Codex validation environment, not of the
+> rebuilt `build-metal/` binaries on the host machine.
+>
+> Practical guidance:
+> - Use `ggml-model-f32-bitnet.gguf` or `--chat-model quality` for interactive
+>   chat quality.
+> - Use `ggml-model-i2s-bitnet.gguf` when compact size and faster load are more
+>   important than freeform chat quality.
 
 ### Benchmark
 We provide scripts to run the inference benchmark providing a model.

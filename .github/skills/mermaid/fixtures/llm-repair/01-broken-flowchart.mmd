@@ -1,0 +1,5 @@
+flowchart LR
+    A[Capture request] --> B{Request valid?
+    B -->|Yes| C[Route to worker]
+    B -->|No| D[Return validation error]
+    C --> E[Done]

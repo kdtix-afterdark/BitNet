@@ -85,19 +85,71 @@ def format_evidence(evidence_items: Iterable[Dict[str, str]]) -> str:
     return "\n\n".join(blocks)
 
 
+def _normalize_message_content(content: str) -> str:
+    """Collapse whitespace so repeated low-information replies compare cleanly."""
+    return " ".join(content.split())
+
+
+def _is_low_information_assistant_reply(content: str) -> bool:
+    """Return True for short assistant boilerplate that should not be replayed repeatedly."""
+    normalized = _normalize_message_content(content)
+    if not normalized or len(normalized) > 160:
+        return False
+    if "```" in content or "`" in content:
+        return False
+    markers = (
+        "how can i assist you today",
+        "how can i help you today",
+        "you can call me",
+        "i'm bitnet",
+    )
+    lowered = normalized.lower()
+    return any(marker in lowered for marker in markers)
+
+
+def shape_conversation_history(
+    conversation_history: Optional[Iterable[Dict[str, str]]],
+) -> List[Dict[str, str]]:
+    """Return a model-facing history that keeps user turns but collapses repeated boilerplate."""
+    shaped: List[Dict[str, str]] = []
+    seen_assistant_boilerplate: set[str] = set()
+
+    for message in conversation_history or []:
+        role = message.get("role", "").strip()
+        content = message.get("content", "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+
+        normalized = _normalize_message_content(content)
+        if role == "assistant" and _is_low_information_assistant_reply(content):
+            if normalized in seen_assistant_boilerplate:
+                continue
+            seen_assistant_boilerplate.add(normalized)
+
+        shaped.append({"role": role, "content": content})
+
+    return shaped
+
+
 def build_messages(
     system_prompt: str,
     user_prompt: str,
     evidence_items: Iterable[Dict[str, str]],
+    conversation_history: Optional[Iterable[Dict[str, str]]] = None,
+    conversation_summary: Optional[str] = None,
+    summarized_turn_count: int = 0,
     required_sections: Optional[Iterable[str]] = None,
     tool_manifest: Optional[Iterable[Dict[str, str]]] = None,
     broker_controls_tools: bool = False,
+    grounded_user_prompt: bool = True,
 ) -> List[Dict[str, str]]:
     """Build chat messages for llama-server."""
-    user_parts = [
-        "Evidence:\n%s" % format_evidence(evidence_items),
-        "Task:\n%s" % user_prompt.strip(),
-    ]
+    user_parts = []
+    if grounded_user_prompt:
+        user_parts = [
+            "Evidence:\n%s" % format_evidence(evidence_items),
+            "Task:\n%s" % user_prompt.strip(),
+        ]
 
     sections = [section.strip() for section in (required_sections or []) if section.strip()]
     if sections:
@@ -117,17 +169,27 @@ def build_messages(
             % "\n\n".join("# %s\n..." % section for section in sections)
         )
 
-    return [
-        {
-            "role": "system",
-            "content": build_system_prompt(
-                system_prompt,
-                tool_manifest=tool_manifest,
-                broker_controls_tools=broker_controls_tools,
-            ),
-        },
+    system_content = build_system_prompt(
+        system_prompt,
+        tool_manifest=tool_manifest,
+        broker_controls_tools=broker_controls_tools,
+    )
+    summary_text = (conversation_summary or "").strip()
+    if summary_text:
+        heading = "Recovered conversation summary for earlier turns omitted from verbatim history"
+        if summarized_turn_count > 0:
+            heading += f" ({summarized_turn_count} turns)"
+        system_content = f"{system_content}\n\n{heading}:\n{summary_text}"
+
+    messages: List[Dict[str, str]] = [{"role": "system", "content": system_content}]
+
+    for message in shape_conversation_history(conversation_history):
+        messages.append(message)
+
+    messages.append(
         {
             "role": "user",
-            "content": "\n\n".join(user_parts),
-        },
-    ]
+            "content": "\n\n".join(user_parts) if grounded_user_prompt else user_prompt.strip(),
+        }
+    )
+    return messages

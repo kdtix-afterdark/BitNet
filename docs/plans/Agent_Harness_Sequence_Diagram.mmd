@@ -1,0 +1,87 @@
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as UI / API
+    participant WF as Workflow Engine / Turn Runtime
+    participant SL as Session Ledger
+    participant CC as Context Compiler
+    participant MR as Model Router / LLM
+    participant TB as Tool Broker / MCP
+    participant MEM as Memory Layer
+    participant EV as Evidence Store
+    participant AR as Artifact Store
+    participant TR as Trace / Evals
+
+    User->>UI: submit request
+    UI->>SL: append(user_message, request_meta)
+    UI->>TR: start trace
+    UI->>WF: start run
+
+    WF->>CC: build context
+    CC->>SL: read recent events
+    CC->>MEM: retrieve summaries + durable facts
+    MEM-->>CC: memory hits
+    CC-->>WF: compiled context
+
+    WF->>MR: infer(context, tool catalog)
+    MR-->>WF: decision + proposed act(s)
+    WF->>SL: append(decision_record)
+    Note over WF,SL: Persist decisions after validation<br/>before any side effect<br/>Do not persist hidden CoT
+
+    alt tool / handoff / approval needed
+        WF->>SL: append(act_intent)
+        Note over WF,SL: Acts = tool_call, handoff,<br/>approval request, state transition, message emit
+
+        opt approval gate
+            WF-->>UI: request approval
+            UI-->>User: approval prompt
+            User-->>UI: approve / deny
+            UI->>SL: append(approval_result)
+        end
+
+        WF->>TB: execute act
+        TB->>SL: append(act_started)
+        TB->>TR: record tool span
+        TB->>EV: persist(raw result, hash, provenance)
+        EV-->>TB: evidence_ref
+        TB->>SL: append(act_finished, evidence_ref)
+        TB-->>WF: normalized result + evidence_ref
+
+        opt tool created file / patch / report
+            TB->>AR: persist(versioned artifact blob + manifest)
+            AR-->>TB: artifact_ref
+            TB->>SL: append(artifact_created, artifact_ref)
+        end
+
+        opt checkpoint hit (subtask done / context pressure / phase end)
+            WF->>MEM: write(summary, key decisions, refs)
+            MEM-->>WF: summary_ref
+            WF->>SL: append(summary_checkpoint, summary_ref)
+            Note over WF,MEM: Persist summaries before compaction,<br/>pause, or handoff
+        end
+
+        WF->>CC: rebuild context with new refs
+        CC->>SL: read new events
+        CC->>MEM: retrieve latest summary
+        CC-->>WF: updated context
+
+        WF->>MR: next inference
+        MR-->>WF: next decision / final answer
+        WF->>SL: append(decision_record)
+    end
+
+    opt final deliverable
+        WF->>AR: persist(final artifact or response package)
+        AR-->>WF: final_artifact_ref
+        WF->>SL: append(final_answer, final_artifact_ref)
+    end
+
+    opt run-complete memory write
+        WF->>MEM: write(final summary, durable facts, preferences?)
+        MEM-->>WF: memory_ref
+        WF->>SL: append(run_summary, memory_ref)
+    end
+
+    WF->>TR: close trace + eval outcome
+    WF-->>UI: response + artifact links
+    UI-->>User: final output

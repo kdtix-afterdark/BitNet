@@ -249,6 +249,11 @@ class McpRegistry:
         """Call one tool on one configured MCP server."""
         return self._get_session(server_name).call_tool(tool_name, arguments)
 
+    def has_server(self, server_name: str) -> bool:
+        """Return whether one MCP server is configured and enabled."""
+        config = self._server_configs.get(server_name)
+        return bool(config and config.enabled)
+
     def close(self) -> None:
         """Close all launched MCP sessions."""
         for session in self._sessions.values():

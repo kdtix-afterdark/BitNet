@@ -1,0 +1,50 @@
+{
+  "notes": [
+    "Focused UAT conversation for the quoted-prompt spillover issue.",
+    "Recommended manual checkpoints: restart the broker after turn 2, after turn 5, and after turn 8.",
+    "Optional manual inserted turns: use `i` after turn 4 or turn 6 to ask follow-up recall questions without advancing the scripted sequence."
+  ],
+  "session": {
+    "metadata": {
+      "uat": "quoted-prompt-spillover-001"
+    }
+  },
+  "turns": [
+    {
+      "prompt": "Hi BitNet, my name is Chris"
+    },
+    {
+      "prompt": "what is my name?"
+    },
+    {
+      "prompt": "I'm conducting some test prompts, so please forgive the next one. I'm going to say something like \"Yes, my name is Chris, Can I call you BitNet?\" You can just respond naturally. You could call me BitNet, but I would prefer if you called me whatever name you would actually like to be called."
+    },
+    {
+      "prompt": "Yes, my name is Chris, Can I call you BitNet?"
+    },
+    {
+      "prompt": "write a simple 160 word story about the two of us, using our names"
+    },
+    {
+      "prompt": "Thank you for that story, I liked it :)"
+    },
+    {
+      "prompt": "Without quoting any earlier prompts, what part of the story did you like the most?"
+    },
+    {
+      "prompt": "Without repeating earlier lines, continue the story in 80 words"
+    },
+    {
+      "prompt": "Are you ok?"
+    },
+    {
+      "prompt": "In one short sentence, what is my name and what name should I call you?"
+    },
+    {
+      "prompt": "Please answer normally and do not include any raw User or Assistant transcript lines"
+    },
+    {
+      "prompt": "Summarize our conversation so far in three short bullet points"
+    }
+  ]
+}

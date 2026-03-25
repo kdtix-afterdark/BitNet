@@ -1,0 +1,48 @@
+{
+  "session": {
+    "metadata": {
+      "uat": "normal-chat-001"
+    }
+  },
+  "turns": [
+    {
+      "prompt": "Hi BitNet, my name is Chris"
+    },
+    {
+      "prompt": "I need a python script that gives me the current date and time"
+    },
+    {
+      "prompt": "what is my name?"
+    },
+    {
+      "prompt": "Yes, my name is Chris, Can I call you BitNet?"
+    },
+    {
+      "prompt": "write a simple 200 word story about the two of us, using our names."
+    },
+    {
+      "prompt": "Thank you for that story, I liked it :)"
+    },
+    {
+      "prompt": "I have been tunning the llama-cli pramaters to get our chat sessions just right. Your BitNetcheckpoint was trained for 4096 context, and the model reports n_ctx_train = 4096 plus n_ctx_orig_yarn = 4096, So this session I set -c 8192 and -n 4096 --temp 0.5 -ngl 999 to see how our conversation would go."
+    },
+    {
+      "prompt": "I could use your help on a project Nexus"
+    },
+    {
+      "prompt": "I am a AI and Cloud Solution Architect, tasked with investigating our clients code and data to give generate Artifacts that descrive their As-Is current state architect, identify oppertunities for AI Modernazation, and to come up with a To-Be future state architecture, work with the client to build a blueprint and backlog that they can build from. I use Models like you to work with me on achieving these goals. I provide you with Model Context Protocol (MCP) Server & Clents that connects you to the source, the data, and helpful unline current architecture patterns, modern programing approches, and web access. So I am attempting to ballance these varables to match an experience that would allow us to have a conversation memory that would allow you to retain enough context about the project while balancing the response length you would need to help me build markdown files with mermain diagrams without runing out of tokens and finding ways to keep tasks small enough for us to itterate through them and store progress in memory markdown files as context refresher history. Its a challange but a great project to work together as peers. What do you think?"
+    },
+    {
+      "prompt": "I am using GPT now, but some of the clients are offline, so I am evaluating you, BitNet, as a locally run model to see how far we can go to achieve what we need when we do not have access to the internet."
+    },
+    {
+      "prompt": "That is great to hear. I could use your help, what are the pros and cons of chooing ggml-model-f32-bitnet.gguf vs ggml-model-i2s-bitnet.gguf"
+    },
+    {
+      "prompt": "Thank you for this feedback, it has been very helpful :) !"
+    },
+    {
+      "prompt": "I could use your help on a project Nexus, what do you remember"
+    }
+  ]
+}

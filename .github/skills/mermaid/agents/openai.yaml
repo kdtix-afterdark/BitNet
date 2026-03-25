@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mermaid"
+  short_description: "Closed-loop Mermaid diagram review"
+  default_prompt: "Use $mermaid to validate Mermaid syntax, render light and dark variants, and iterate on readability."

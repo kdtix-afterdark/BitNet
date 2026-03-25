@@ -62,10 +62,14 @@ class LlamaServerRuntime:
             str(self.config.threads),
             "-n",
             str(self.config.n_predict),
+            "--keep",
+            str(self.config.n_keep),
             "-ngl",
-            "0",
+            str(self.config.gpu_layers),
             "--temp",
             str(self.config.temperature),
+            "--top-p",
+            str(self.config.top_p),
             "--host",
             self.config.llama_host,
             "--port",
@@ -144,17 +148,39 @@ class LlamaServerRuntime:
         messages: List[Dict[str, str]],
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Send one chat completion request to the managed llama-server."""
         self.ensure_started()
 
-        payload = {
+        payload = self.build_chat_payload(
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        return self.chat_payload(payload)
+
+    def build_chat_payload(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Build one llama-server chat completion payload."""
+        return {
             "model": "bitnet-local",
             "messages": messages,
             "max_tokens": max_tokens or self.config.n_predict,
             "temperature": self.config.temperature if temperature is None else temperature,
+            "top_p": self.config.top_p if top_p is None else top_p,
             "stream": False,
         }
+
+    def chat_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a prebuilt chat completion payload to the managed llama-server."""
+        self.ensure_started()
         data = json.dumps(payload).encode("utf-8")
 
         request = urllib.request.Request(
