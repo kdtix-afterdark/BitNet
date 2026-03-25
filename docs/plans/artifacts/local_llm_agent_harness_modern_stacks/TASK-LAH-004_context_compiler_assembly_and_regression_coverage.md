@@ -211,10 +211,12 @@ The regression suite is in `tests/test_prompting.py` and is run by
 ### Metal UAT bootstrap (Apple Silicon lab)
 
 The verified local bootstrap path uses a dedicated `build-metal/` tree and
-attaches the broker to a manually-started `llama-server`.  The broker's
-`_attach_to_existing_server()` path is the correct approach for Metal UAT
-because the managed-runtime path (`ensure_started()`) would start its own
-`llama-server` instance with the wrong flags.
+attaches the broker to a manually-started `llama-server`. The broker's
+`_attach_to_existing_server()` path is still the preferred approach for Metal
+UAT because it gives the tester deterministic control over the exact runtime
+flags and keeps the llama runtime isolated from broker restarts. The managed
+runtime path now forwards the important Metal flags correctly, but manual
+attach remains the cleanest UAT path.
 
 **Step 1 — initialise submodules and generate kernel headers**
 
@@ -223,6 +225,7 @@ arguments.  For `BitNet-b1.58-2B-4T` (arm64):
 
 ```bash
 cd /path/to/BitNet
+git submodule sync --recursive
 git submodule update --init --recursive
 python3 utils/codegen_tl1.py \
   --model bitnet_b1_58-3B \
@@ -231,13 +234,17 @@ python3 utils/codegen_tl1.py \
   --bm 32,64,32
 ```
 
-Alternatively, let `setup_env.py` handle both code generation and the build in
-one step:
+Alternatively, let `setup_env.py` handle code generation, build, and model
+download in one step. Use `--model-dir models` when downloading from
+Hugging Face so the script can create the expected model subdirectory itself.
+If the local model already exists, prefer the explicit codegen + CMake path
+above for the most repeatable UAT setup.
 
 ```bash
 python3 setup_env.py \
   --backend metal \
-  --model-dir models/BitNet-b1.58-2B-4T \
+  --build-dir build-metal \
+  --model-dir models \
   --hf-repo microsoft/BitNet-b1.58-2B-4T
 ```
 
@@ -275,6 +282,8 @@ cmake --build build-metal --config Release -j$(sysctl -n hw.logicalcpu)
   -n 4096 \
   --keep -1 \
   -ngl 999 \
+  -b 2048 \
+  -ub 512 \
   --temp 0.5 \
   --top-p 0.9 \
   --host 127.0.0.1 \
@@ -286,30 +295,38 @@ cmake --build build-metal --config Release -j$(sysctl -n hw.logicalcpu)
 
 The broker auto-attaches to the running server on port 8080; no managed
 process is started.  `BITNET_LLAMA_SERVER_PATH` is not needed because the
-broker uses `_attach_to_existing_server()` before attempting to spawn one.
+broker uses `_attach_to_existing_server()` before attempting to spawn one. If
+no server is already running, the current managed runtime can also launch
+`llama-server` with the correct Metal/UAT flags.
 
 ```bash
 export BITNET_BROKER_MODEL=/path/to/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
 export BITNET_BROKER_GPU_LAYERS=999
+export BITNET_BROKER_THREADS=10
 export BITNET_BROKER_CTX_SIZE=4096
 export BITNET_BROKER_N_PREDICT=4096
 export BITNET_BROKER_N_KEEP=-1
 export BITNET_BROKER_TEMPERATURE=0.5
 export BITNET_BROKER_TOP_P=0.9
-python -m broker.server
+export BITNET_BROKER_BATCH_SIZE=2048
+export BITNET_BROKER_UBATCH_SIZE=512
+python3 -m broker.server
 ```
 
 Or equivalently via CLI flags:
 
 ```bash
-python -m broker.server \
+python3 -m broker.server \
   --model /path/to/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf \
+  --threads 10 \
   --ctx-size 4096 \
   --n-predict 4096 \
   --n-keep -1 \
   --temperature 0.5 \
   --top-p 0.9 \
   --gpu-layers 999
+  --batch-size 2048 \
+  --ubatch-size 512
 ```
 
 **Step 5 — UAT scenario 1: basic `/chat` round-trip**
