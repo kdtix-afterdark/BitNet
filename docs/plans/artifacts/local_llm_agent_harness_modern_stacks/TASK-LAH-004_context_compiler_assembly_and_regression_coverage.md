@@ -218,23 +218,49 @@ because the managed-runtime path (`ensure_started()`) would start its own
 
 **Step 1 — initialise submodules and generate kernel headers**
 
+The `codegen_tl1.py` script does not accept `--outdir`; use the explicit model
+arguments.  For `BitNet-b1.58-2B-4T` (arm64):
+
 ```bash
 cd /path/to/BitNet
 git submodule update --init --recursive
-python3 utils/codegen_tl1.py --outdir include/
+python3 utils/codegen_tl1.py \
+  --model bitnet_b1_58-3B \
+  --BM 160,320,320 \
+  --BK 64,128,64 \
+  --bm 32,64,32
 ```
 
-**Step 2 — build with Apple clang into a dedicated Metal tree**
-
-Use Apple clang (not Homebrew clang) to avoid `ggml-blas.cpp` build failures
-on current macOS SDKs:
+Alternatively, let `setup_env.py` handle both code generation and the build in
+one step:
 
 ```bash
+python3 setup_env.py \
+  --backend metal \
+  --model-dir models/BitNet-b1.58-2B-4T \
+  --hf-repo microsoft/BitNet-b1.58-2B-4T
+```
+
+**Step 2 — build with Homebrew clang 18 into a dedicated Metal tree**
+
+The validated lab build uses Homebrew clang 18 (not Apple clang) together with
+`GGML_ACCELERATE=ON`, `GGML_BLAS=ON/Apple`, and `BITNET_ARM_TL1=OFF`.
+`setup_env.py --backend metal` selects these flags automatically; the manual
+equivalent is:
+
+```bash
+LLVM18=$(brew --prefix llvm@18)
+LIBOMP=$(brew --prefix libomp)
 cmake -B build-metal \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=$LLVM18/bin/clang \
+  -DCMAKE_CXX_COMPILER=$LLVM18/bin/clang++ \
   -DGGML_METAL=ON \
-  -DCMAKE_C_COMPILER=$(xcrun -f clang) \
-  -DCMAKE_CXX_COMPILER=$(xcrun -f clang++)
+  -DGGML_ACCELERATE=ON \
+  -DGGML_BLAS=ON \
+  -DGGML_BLAS_VENDOR=Apple \
+  -DOpenMP_ROOT=$LIBOMP \
+  -DBITNET_ARM_TL1=OFF
 cmake --build build-metal --config Release -j$(sysctl -n hw.logicalcpu)
 # Binary lands at: build-metal/bin/llama-server
 ```
