@@ -271,6 +271,7 @@ def compile():
     run_command(["cmake", "--build", build_dir, "--config", "Release"], log_step="compile")
 
 def main():
+    setup_gguf()
     gen_code()
     compile()
     prepare_model()
